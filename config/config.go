@@ -14,15 +14,18 @@ import (
 )
 
 const (
-	defaultConfigPath           = "config.yaml"
-	envPrefix                   = "TAP_"
-	defaultAdminReplayMaxLimit  = 2000
-	maxAdminReplayMaxLimit      = 100000
-	defaultAdminReplayJobTTL    = 24 * time.Hour
-	defaultAdminReplayJobMax    = 512
-	maxAdminReplayJobMax        = 100000
-	defaultAdminRateLimitPerSec = 5.0
-	defaultAdminRateLimitBurst  = 20
+	defaultConfigPath            = "config.yaml"
+	envPrefix                    = "TAP_"
+	defaultAdminReplayMaxLimit   = 2000
+	maxAdminReplayMaxLimit       = 100000
+	defaultAdminReplayJobTTL     = 24 * time.Hour
+	defaultAdminReplayJobMax     = 512
+	maxAdminReplayJobMax         = 100000
+	defaultAdminReplayJobTimeout = 5 * time.Minute
+	defaultAdminReplayConcurrent = 2
+	maxAdminReplayConcurrent     = 100
+	defaultAdminRateLimitPerSec  = 5.0
+	defaultAdminRateLimitBurst   = 20
 )
 
 type Config struct {
@@ -106,6 +109,8 @@ type ServerConfig struct {
 	AdminReplayMaxLimit       int           `koanf:"admin_replay_max_limit"`
 	AdminReplayJobTTL         time.Duration `koanf:"admin_replay_job_ttl"`
 	AdminReplayJobMaxJobs     int           `koanf:"admin_replay_job_max_jobs"`
+	AdminReplayJobTimeout     time.Duration `koanf:"admin_replay_job_timeout"`
+	AdminReplayMaxConcurrent  int           `koanf:"admin_replay_max_concurrent_jobs"`
 	AdminRateLimitPerSec      float64       `koanf:"admin_rate_limit_per_sec"`
 	AdminRateLimitBurst       int           `koanf:"admin_rate_limit_burst"`
 	AdminAllowedCIDRs         []string      `koanf:"admin_allowed_cidrs"`
@@ -173,6 +178,12 @@ func (c *Config) ApplyDefaults() {
 	if c.Server.AdminReplayJobMaxJobs == 0 {
 		c.Server.AdminReplayJobMaxJobs = defaultAdminReplayJobMax
 	}
+	if c.Server.AdminReplayJobTimeout == 0 {
+		c.Server.AdminReplayJobTimeout = defaultAdminReplayJobTimeout
+	}
+	if c.Server.AdminReplayMaxConcurrent == 0 {
+		c.Server.AdminReplayMaxConcurrent = defaultAdminReplayConcurrent
+	}
 	if c.Server.AdminRateLimitPerSec == 0 {
 		c.Server.AdminRateLimitPerSec = defaultAdminRateLimitPerSec
 	}
@@ -207,6 +218,12 @@ func (c Config) Validate() error {
 	}
 	if c.Server.AdminReplayJobMaxJobs <= 0 || c.Server.AdminReplayJobMaxJobs > maxAdminReplayJobMax {
 		return fmt.Errorf("server.admin_replay_job_max_jobs must be in range 1..%d", maxAdminReplayJobMax)
+	}
+	if c.Server.AdminReplayJobTimeout <= 0 {
+		return fmt.Errorf("server.admin_replay_job_timeout must be greater than 0")
+	}
+	if c.Server.AdminReplayMaxConcurrent <= 0 || c.Server.AdminReplayMaxConcurrent > maxAdminReplayConcurrent {
+		return fmt.Errorf("server.admin_replay_max_concurrent_jobs must be in range 1..%d", maxAdminReplayConcurrent)
 	}
 	if c.Server.AdminRateLimitPerSec <= 0 {
 		return fmt.Errorf("server.admin_rate_limit_per_sec must be greater than 0")

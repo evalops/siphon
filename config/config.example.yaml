@@ -123,6 +123,8 @@ server:
   admin_replay_max_limit: 2000
   admin_replay_job_ttl: 24h
   admin_replay_job_max_jobs: 512
+  admin_replay_job_timeout: 5m
+  admin_replay_max_concurrent_jobs: 2
   admin_rate_limit_per_sec: 5
   admin_rate_limit_burst: 20
   admin_allowed_cidrs: []

@@ -135,12 +135,24 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 		adminMTLSRequired := cfg.Server.AdminMTLSRequired
 		adminMTLSClientCertHeader := strings.TrimSpace(cfg.Server.AdminMTLSClientCertHeader)
+		adminReplayJobTimeout := cfg.Server.AdminReplayJobTimeout
+		if adminReplayJobTimeout <= 0 {
+			adminReplayJobTimeout = 5 * time.Minute
+		}
+		adminReplayMaxConcurrent := cfg.Server.AdminReplayMaxConcurrent
+		if adminReplayMaxConcurrent <= 0 {
+			adminReplayMaxConcurrent = 1
+		}
 		retryAfterSeconds := adminRetryAfterSeconds(adminRateLimitPerSec)
 		adminLimiters := newAdminRateLimiterRegistry(rate.Limit(adminRateLimitPerSec), adminRateLimitBurst)
 		replayJobs := newAdminReplayJobRegistry(cfg.Server.AdminReplayJobMaxJobs, cfg.Server.AdminReplayJobTTL)
+		replaySlots := make(chan struct{}, adminReplayMaxConcurrent)
 		observeAdmin := func(endpoint, outcome string, startedAt time.Time) {
 			metrics.AdminRequestsTotal.WithLabelValues(endpoint, outcome).Inc()
 			metrics.AdminRequestDurationSeconds.WithLabelValues(endpoint, outcome).Observe(time.Since(startedAt).Seconds())
+		}
+		observeReplayJob := func(stage string) {
+			metrics.AdminReplayJobsTotal.WithLabelValues(stage).Inc()
 		}
 		type adminAccess struct {
 			RequestID string
@@ -277,6 +289,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			}, idempotencyKey)
 			if idempotencyConflict {
 				observeAdmin(adminEndpointReplayDLQ, adminOutcomeConflict, startedAt)
+				observeReplayJob("conflict")
 				logger.Warn("admin replay dlq idempotency conflict",
 					"path", r.URL.Path,
 					"method", r.Method,
@@ -304,6 +317,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					"job":                job,
 				})
 				observeAdmin(adminEndpointReplayDLQ, adminOutcomeSuccess, startedAt)
+				observeReplayJob("reused")
 				logger.Info("admin replay dlq idempotency reused",
 					"path", r.URL.Path,
 					"method", r.Method,
@@ -317,12 +331,20 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				)
 				return
 			}
+			observeReplayJob("accepted")
 			go func(jobID string, limit int, dryRun bool, tokenSlot, requestIP string) {
+				replaySlots <- struct{}{}
+				metrics.AdminReplayJobsInFlight.Inc()
+				defer func() {
+					metrics.AdminReplayJobsInFlight.Dec()
+					<-replaySlots
+				}()
 				replayJobs.MarkRunning(jobID)
 				if dryRun {
 					pending, err := dlqPublisher.Pending()
 					if err != nil {
 						replayJobs.MarkFailed(jobID, err.Error())
+						observeReplayJob("failed")
 						logger.Error("admin replay dlq dry-run failed", "job_id", jobID, "token_slot", tokenSlot, "requester_ip", requestIP, "error", err.Error())
 						return
 					}
@@ -331,18 +353,23 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 						wouldReplay = limit
 					}
 					replayJobs.MarkSucceeded(jobID, wouldReplay)
+					observeReplayJob("succeeded")
 					logger.Info("admin replay dlq dry-run completed", "job_id", jobID, "token_slot", tokenSlot, "requester_ip", requestIP, "would_replay", wouldReplay)
 					return
 				}
-				replayed, err := dlqPublisher.Replay(ctx, limit, func(ctx context.Context, subject string, payload []byte, dedupID string) error {
+				replayCtx, cancelReplay := context.WithTimeout(ctx, adminReplayJobTimeout)
+				defer cancelReplay()
+				replayed, err := dlqPublisher.Replay(replayCtx, limit, func(ctx context.Context, subject string, payload []byte, dedupID string) error {
 					return publisher.PublishRaw(ctx, subject, payload, dedupID)
 				})
 				if err != nil {
 					replayJobs.MarkFailed(jobID, err.Error())
+					observeReplayJob("failed")
 					logger.Error("admin replay dlq job failed", "job_id", jobID, "token_slot", tokenSlot, "requester_ip", requestIP, "error", err.Error())
 					return
 				}
 				replayJobs.MarkSucceeded(jobID, replayed)
+				observeReplayJob("succeeded")
 				logger.Info("admin replay dlq job completed", "job_id", jobID, "token_slot", tokenSlot, "requester_ip", requestIP, "replayed_count", replayed)
 			}(job.JobID, job.EffectiveLimit, job.DryRun, access.TokenSlot, access.RequestIP)
 

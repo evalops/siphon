@@ -32,6 +32,16 @@
               "maximum": 100000,
               "description": "Maximum number of replay jobs tracked in-memory."
             },
+            "admin_replay_job_timeout": {
+              "type": "string",
+              "description": "Maximum execution time for one replay job attempt (for example 5m)."
+            },
+            "admin_replay_max_concurrent_jobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "Maximum replay jobs executing concurrently."
+            },
             "admin_rate_limit_per_sec": {
               "type": "number",
               "exclusiveMinimum": 0,

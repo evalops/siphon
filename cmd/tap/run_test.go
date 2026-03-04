@@ -962,6 +962,18 @@ func TestRunAdminReplayEndpointRequiresToken(t *testing.T) {
 		"endpoint": adminEndpointReplayDLQ,
 		"outcome":  adminOutcomeSuccess,
 	}, 3)
+	assertMetricAtLeast(t, metricsText, "tap_admin_replay_jobs_total", map[string]string{
+		"stage": "accepted",
+	}, 3)
+	assertMetricAtLeast(t, metricsText, "tap_admin_replay_jobs_total", map[string]string{
+		"stage": "reused",
+	}, 1)
+	assertMetricAtLeast(t, metricsText, "tap_admin_replay_jobs_total", map[string]string{
+		"stage": "conflict",
+	}, 1)
+	assertMetricAtLeast(t, metricsText, "tap_admin_replay_jobs_total", map[string]string{
+		"stage": "succeeded",
+	}, 3)
 
 	cancel()
 	select {
@@ -1407,12 +1419,13 @@ func TestRunAdminReplayUnderContention(t *testing.T) {
 			DedupWindow:   time.Minute,
 		},
 		Server: config.ServerConfig{
-			Port:                 port,
-			BasePath:             "/webhooks",
-			MaxBodySize:          1 << 20,
-			AdminToken:           "test-admin-token",
-			AdminRateLimitPerSec: 200,
-			AdminRateLimitBurst:  200,
+			Port:                     port,
+			BasePath:                 "/webhooks",
+			MaxBodySize:              1 << 20,
+			AdminToken:               "test-admin-token",
+			AdminRateLimitPerSec:     200,
+			AdminRateLimitBurst:      200,
+			AdminReplayMaxConcurrent: 1,
 		},
 	}
 	cfg.ApplyDefaults()

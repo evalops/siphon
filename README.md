@@ -73,6 +73,7 @@ When `server.admin_token` is set, these endpoints are available:
   - `dry_run=true` computes replayable count without consuming DLQ entries.
   - Replay is capped by `server.admin_replay_max_limit` (default `2000`, valid range `1..100000`); accepted response includes replay job metadata (`job_id`, `status`, `effective_limit`, `max_limit`, `capped`, `dry_run`).
   - Replay job metadata retention/capacity is configurable (`server.admin_replay_job_ttl`, `server.admin_replay_job_max_jobs`).
+  - Replay execution is configurable (`server.admin_replay_job_timeout`, `server.admin_replay_max_concurrent_jobs`) for bounded runtime and concurrency.
 - `GET /admin/replay-dlq/{job_id}`
   - Requires header `X-Admin-Token`.
   - Returns current replay job state (`queued`, `running`, `succeeded`, `failed`) and result fields (`replayed`, `error`).
@@ -85,6 +86,7 @@ When `server.admin_token` is set, these endpoints are available:
   - Response includes `count` and per-poller runtime fields (`interval`, rate limiter values, failure budget, circuit-break duration, jitter ratio, last run/success/error details).
   - Structured audit logs are emitted for authorized and unauthorized admin calls (`request_id`, requester IP, user-agent, path/method, and duration).
   - Prometheus metrics include `tap_admin_requests_total{endpoint,outcome}` and `tap_admin_request_duration_seconds{endpoint,outcome}`.
+  - Replay lifecycle metrics include `tap_admin_replay_jobs_total{stage}` and `tap_admin_replay_jobs_in_flight`.
   - Poller health metrics include `tap_poller_stuck{provider,tenant}` and `tap_poller_consecutive_failures{provider,tenant}`.
 
 ## Admin API Contract

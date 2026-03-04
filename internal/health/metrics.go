@@ -16,6 +16,8 @@ type Metrics struct {
 	EventsDedupHitsTotal             *prometheus.CounterVec
 	AdminRequestsTotal               *prometheus.CounterVec
 	AdminRequestDurationSeconds      *prometheus.HistogramVec
+	AdminReplayJobsTotal             *prometheus.CounterVec
+	AdminReplayJobsInFlight          prometheus.Gauge
 	PollerStuck                      *prometheus.GaugeVec
 	PollerConsecutiveFailures        *prometheus.GaugeVec
 	ProviderHealth                   *prometheus.GaugeVec
@@ -64,6 +66,14 @@ func NewMetrics() *Metrics {
 				Help:    "Admin endpoint request latency by endpoint and outcome.",
 				Buckets: prometheus.DefBuckets,
 			}, []string{"endpoint", "outcome"}),
+			AdminReplayJobsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "tap_admin_replay_jobs_total",
+				Help: "Admin replay job lifecycle transitions by stage.",
+			}, []string{"stage"}),
+			AdminReplayJobsInFlight: promauto.NewGauge(prometheus.GaugeOpts{
+				Name: "tap_admin_replay_jobs_in_flight",
+				Help: "Current number of replay jobs actively executing.",
+			}),
 			PollerStuck: promauto.NewGaugeVec(prometheus.GaugeOpts{
 				Name: "tap_poller_stuck",
 				Help: "Poller stuck state (1 stuck, 0 healthy) by provider and tenant.",

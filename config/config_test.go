@@ -74,6 +74,12 @@ func TestLoadConfigMissingFileAppliesDefaults(t *testing.T) {
 	if cfg.Server.AdminReplayJobMaxJobs != 512 {
 		t.Fatalf("expected default admin replay job max jobs 512, got %d", cfg.Server.AdminReplayJobMaxJobs)
 	}
+	if cfg.Server.AdminReplayJobTimeout != 5*time.Minute {
+		t.Fatalf("expected default admin replay job timeout 5m, got %s", cfg.Server.AdminReplayJobTimeout)
+	}
+	if cfg.Server.AdminReplayMaxConcurrent != 2 {
+		t.Fatalf("expected default admin replay max concurrent jobs 2, got %d", cfg.Server.AdminReplayMaxConcurrent)
+	}
 	if cfg.Server.AdminRateLimitPerSec != 5.0 {
 		t.Fatalf("expected default admin rate limit per sec 5.0, got %v", cfg.Server.AdminRateLimitPerSec)
 	}
@@ -93,6 +99,8 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	t.Setenv("TAP_SERVER_ADMIN_REPLAY_MAX_LIMIT", "1234")
 	t.Setenv("TAP_SERVER_ADMIN_REPLAY_JOB_TTL", "12h")
 	t.Setenv("TAP_SERVER_ADMIN_REPLAY_JOB_MAX_JOBS", "777")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_JOB_TIMEOUT", "2m")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_MAX_CONCURRENT_JOBS", "6")
 	t.Setenv("TAP_SERVER_ADMIN_RATE_LIMIT_PER_SEC", "2.5")
 	t.Setenv("TAP_SERVER_ADMIN_RATE_LIMIT_BURST", "9")
 	t.Setenv("TAP_SERVER_ADMIN_TOKEN", "current-admin-token")
@@ -120,6 +128,12 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	}
 	if cfg.Server.AdminReplayJobMaxJobs != 777 {
 		t.Fatalf("expected server.admin_replay_job_max_jobs override, got %d", cfg.Server.AdminReplayJobMaxJobs)
+	}
+	if cfg.Server.AdminReplayJobTimeout != 2*time.Minute {
+		t.Fatalf("expected server.admin_replay_job_timeout override, got %s", cfg.Server.AdminReplayJobTimeout)
+	}
+	if cfg.Server.AdminReplayMaxConcurrent != 6 {
+		t.Fatalf("expected server.admin_replay_max_concurrent_jobs override, got %d", cfg.Server.AdminReplayMaxConcurrent)
 	}
 	if cfg.Server.AdminRateLimitPerSec != 2.5 {
 		t.Fatalf("expected server.admin_rate_limit_per_sec override, got %v", cfg.Server.AdminRateLimitPerSec)
@@ -206,6 +220,24 @@ func TestConfigValidateAdminTokenAndReplayRules(t *testing.T) {
 			wantErrSub: "admin_replay_job_max_jobs",
 		},
 		{
+			name: "replay job timeout must be positive",
+			cfg: Config{
+				Server: ServerConfig{
+					AdminReplayJobTimeout: -1 * time.Second,
+				},
+			},
+			wantErrSub: "admin_replay_job_timeout",
+		},
+		{
+			name: "replay max concurrent jobs upper bound enforced",
+			cfg: Config{
+				Server: ServerConfig{
+					AdminReplayMaxConcurrent: 101,
+				},
+			},
+			wantErrSub: "admin_replay_max_concurrent_jobs",
+		},
+		{
 			name: "admin rate limit per sec must be positive",
 			cfg: Config{
 				Server: ServerConfig{
@@ -236,14 +268,16 @@ func TestConfigValidateAdminTokenAndReplayRules(t *testing.T) {
 			name: "valid token rotation and replay max",
 			cfg: Config{
 				Server: ServerConfig{
-					AdminToken:            "primary-token",
-					AdminTokenSecondary:   "next-token",
-					AdminReplayMaxLimit:   5000,
-					AdminReplayJobTTL:     12 * time.Hour,
-					AdminReplayJobMaxJobs: 2048,
-					AdminRateLimitPerSec:  3.5,
-					AdminRateLimitBurst:   11,
-					AdminAllowedCIDRs:     []string{"203.0.113.0/24"},
+					AdminToken:               "primary-token",
+					AdminTokenSecondary:      "next-token",
+					AdminReplayMaxLimit:      5000,
+					AdminReplayJobTTL:        12 * time.Hour,
+					AdminReplayJobMaxJobs:    2048,
+					AdminReplayJobTimeout:    2 * time.Minute,
+					AdminReplayMaxConcurrent: 4,
+					AdminRateLimitPerSec:     3.5,
+					AdminRateLimitBurst:      11,
+					AdminAllowedCIDRs:        []string{"203.0.113.0/24"},
 				},
 			},
 		},
