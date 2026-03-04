@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS %s.%s (
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(time)
 ORDER BY (provider, entity_type, time, id)
-TTL time + INTERVAL 1 YEAR
+TTL toDateTime(time) + INTERVAL 1 YEAR
 SETTINGS index_granularity = 8192`, s.cfg.Database, s.cfg.Table)
 
 	if err := s.conn.Exec(ctx, query); err != nil {
