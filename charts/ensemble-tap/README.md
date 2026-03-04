@@ -21,6 +21,17 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --set env[0].value=your-secret \
   --set config.providers.stripe.mode=webhook \
   --set config.providers.stripe.secret='${STRIPE_WEBHOOK_SECRET}'
+
+# Optional admin rotation + replay cap settings
+helm upgrade --install ensemble-tap ./charts/ensemble-tap \
+  --namespace ensemble \
+  --set env[0].name=TAP_ADMIN_TOKEN \
+  --set env[0].value=primary-token \
+  --set env[1].name=TAP_ADMIN_TOKEN_SECONDARY \
+  --set env[1].value=next-token \
+  --set config.server.admin_token='${TAP_ADMIN_TOKEN}' \
+  --set config.server.admin_token_secondary='${TAP_ADMIN_TOKEN_SECONDARY}' \
+  --set config.server.admin_replay_max_limit=2000
 ```
 
 ## Enable sqlite state persistence

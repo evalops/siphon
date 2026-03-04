@@ -611,10 +611,11 @@ func TestRunAdminPollerStatusEndpoint(t *testing.T) {
 			DedupWindow:   time.Minute,
 		},
 		Server: config.ServerConfig{
-			Port:        port,
-			BasePath:    "/webhooks",
-			MaxBodySize: 1 << 20,
-			AdminToken:  "test-admin-token",
+			Port:                port,
+			BasePath:            "/webhooks",
+			MaxBodySize:         1 << 20,
+			AdminToken:          "test-admin-token",
+			AdminTokenSecondary: "next-admin-token-status",
 		},
 	}
 	cfg.ApplyDefaults()
@@ -673,10 +674,10 @@ func TestRunAdminPollerStatusEndpoint(t *testing.T) {
 		Count     int            `json:"count"`
 		Pollers   []pollerStatus `json:"pollers"`
 	}
-	readStatus := func(url, reqID, userAgent, forwardedFor string) pollerStatusResponse {
+	readStatus := func(url, token, reqID, userAgent, forwardedFor string) pollerStatusResponse {
 		t.Helper()
 		reqWithToken, _ := http.NewRequest(http.MethodGet, url, nil)
-		reqWithToken.Header.Set("X-Admin-Token", "test-admin-token")
+		reqWithToken.Header.Set("X-Admin-Token", token)
 		if strings.TrimSpace(reqID) != "" {
 			reqWithToken.Header.Set("X-Request-ID", reqID)
 		}
@@ -719,7 +720,7 @@ func TestRunAdminPollerStatusEndpoint(t *testing.T) {
 	var got pollerStatusResponse
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		got = readStatus(statusURL, "", "", "")
+		got = readStatus(statusURL, "test-admin-token", "", "", "")
 		if len(got.Pollers) > 0 && !got.Pollers[0].LastRunAt.IsZero() {
 			break
 		}
@@ -746,21 +747,21 @@ func TestRunAdminPollerStatusEndpoint(t *testing.T) {
 		t.Fatalf("expected no poller error, got %q", status.LastError)
 	}
 
-	filteredProvider := readStatus(statusURL+"?provider=NOTION", "status-provider-1", "tap-status-test/provider", "203.0.113.61")
+	filteredProvider := readStatus(statusURL+"?provider=NOTION", "next-admin-token-status", "status-provider-1", "tap-status-test/provider", "203.0.113.61")
 	if filteredProvider.Provider != "NOTION" || filteredProvider.Count != 1 || len(filteredProvider.Pollers) != 1 {
 		t.Fatalf("unexpected provider-filter response: %+v", filteredProvider)
 	}
 	if filteredProvider.RequestID != "status-provider-1" {
 		t.Fatalf("expected provider-filter request_id in response, got %q", filteredProvider.RequestID)
 	}
-	filteredTenant := readStatus(statusURL+"?tenant=missing-tenant", "status-tenant-1", "tap-status-test/tenant", "203.0.113.62")
+	filteredTenant := readStatus(statusURL+"?tenant=missing-tenant", "test-admin-token", "status-tenant-1", "tap-status-test/tenant", "203.0.113.62")
 	if filteredTenant.Tenant != "missing-tenant" || filteredTenant.Count != 0 || len(filteredTenant.Pollers) != 0 {
 		t.Fatalf("unexpected tenant-filter response: %+v", filteredTenant)
 	}
 	if filteredTenant.RequestID != "status-tenant-1" {
 		t.Fatalf("expected tenant-filter request_id in response, got %q", filteredTenant.RequestID)
 	}
-	filteredCombo := readStatus(statusURL+"?provider=notion&tenant=tenant-ops", "", "", "")
+	filteredCombo := readStatus(statusURL+"?provider=notion&tenant=tenant-ops", "test-admin-token", "", "", "")
 	if filteredCombo.Count != 1 || len(filteredCombo.Pollers) != 1 {
 		t.Fatalf("unexpected combined-filter response: %+v", filteredCombo)
 	}
@@ -786,16 +787,18 @@ func TestRunAdminPollerStatusEndpoint(t *testing.T) {
 		path, okPath := entry["path"].(string)
 		method, okMethod := entry["method"].(string)
 		requestID, okRequestID := entry["request_id"].(string)
+		tokenSlot, okTokenSlot := entry["token_slot"].(string)
 		provider, okProvider := entry["provider_filter"].(string)
 		tenant, okTenant := entry["tenant_filter"].(string)
 		count, okCount := logFieldInt(entry, "poller_count")
 		ip, okIP := entry["requester_ip"].(string)
 		userAgent, okUA := entry["user_agent"].(string)
 		durationMS, okDuration := logFieldInt(entry, "duration_ms")
-		return okPath && okMethod && okRequestID && okProvider && okTenant && okCount && okIP && okUA && okDuration &&
+		return okPath && okMethod && okRequestID && okTokenSlot && okProvider && okTenant && okCount && okIP && okUA && okDuration &&
 			path == "/admin/poller-status" &&
 			method == http.MethodGet &&
 			requestID == "status-provider-1" &&
+			tokenSlot == "secondary" &&
 			provider == "NOTION" &&
 			tenant == "" &&
 			count == 1 &&
