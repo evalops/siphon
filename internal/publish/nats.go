@@ -80,8 +80,11 @@ func (p *NATSPublisher) ensureStream(_ context.Context) error {
 		Duplicates: p.cfg.DedupWindow,
 	}
 
-	if _, err := p.js.AddStream(streamCfg); err != nil {
-		if !strings.Contains(err.Error(), "stream name already in use") && !strings.Contains(err.Error(), "stream already in use") {
+	if _, err := p.js.AddStream(streamCfg); err == nil {
+		return nil
+	} else {
+		_, infoErr := p.js.StreamInfo(p.cfg.Stream)
+		if infoErr != nil {
 			return fmt.Errorf("add stream %s: %w", p.cfg.Stream, err)
 		}
 		if _, err := p.js.UpdateStream(streamCfg); err != nil {

@@ -64,6 +64,45 @@ func TestNATSPublisherPublishesAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestNATSPublisherEnsureStreamIsIdempotent(t *testing.T) {
+	s := runNATSServer(t)
+	cfg := config.NATSConfig{
+		URL:           s.ClientURL(),
+		Stream:        "ENSEMBLE_TAP_IDEMPOTENT",
+		SubjectPrefix: "ensemble.tap",
+		MaxAge:        time.Hour,
+		DedupWindow:   time.Minute,
+	}
+
+	ctx := context.Background()
+	first, err := NewNATSPublisher(ctx, cfg, nil)
+	if err != nil {
+		t.Fatalf("first publisher: %v", err)
+	}
+	defer first.Close()
+
+	second, err := NewNATSPublisher(ctx, cfg, nil)
+	if err != nil {
+		t.Fatalf("second publisher against existing stream: %v", err)
+	}
+	defer second.Close()
+
+	evt, err := normalize.ToCloudEvent(normalize.NormalizedEvent{
+		Provider:     "github",
+		EntityType:   "issues",
+		EntityID:     "7",
+		Action:       "opened",
+		ProviderTime: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("build cloud event: %v", err)
+	}
+
+	if _, err := second.Publish(ctx, evt, "idempotent_1"); err != nil {
+		t.Fatalf("publish from second publisher: %v", err)
+	}
+}
+
 func runNATSServer(t *testing.T) *natsserver.Server {
 	t.Helper()
 
