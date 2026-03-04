@@ -22,12 +22,14 @@ func NormalizeStripe(evt stripe.Event, tenantID string) (normalize.NormalizedEve
 	}
 
 	snapshot := map[string]any{}
-	if len(evt.Data.Raw) > 0 {
-		_ = json.Unmarshal(evt.Data.Raw, &snapshot)
+	if evt.Data != nil {
+		if len(evt.Data.Raw) > 0 {
+			_ = json.Unmarshal(evt.Data.Raw, &snapshot)
+		}
 	}
 
 	entityID := extractEntityID(snapshot)
-	if entityID == "unknown" && evt.Data.Object != nil {
+	if entityID == "unknown" && evt.Data != nil && evt.Data.Object != nil {
 		obj := map[string]any{}
 		raw, _ := json.Marshal(evt.Data.Object)
 		_ = json.Unmarshal(raw, &obj)
