@@ -34,13 +34,14 @@ type clickhouseRow struct {
 }
 
 type ClickHouseSink struct {
-	cfg     config.ClickHouseConfig
-	natsCfg config.NATSConfig
-	js      nats.JetStreamContext
-	metrics *health.Metrics
-	conn    driver.Conn
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	cfg          config.ClickHouseConfig
+	natsCfg      config.NATSConfig
+	js           nats.JetStreamContext
+	metrics      *health.Metrics
+	conn         driver.Conn
+	insertRowsFn func(context.Context, []clickhouseRow) error
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 func NewClickHouseSink(ctx context.Context, cfg config.ClickHouseConfig, natsCfg config.NATSConfig, js nats.JetStreamContext, metrics *health.Metrics) (*ClickHouseSink, error) {
@@ -193,6 +194,13 @@ func (s *ClickHouseSink) consumeLoop(ctx context.Context, sub *nats.Subscription
 }
 
 func (s *ClickHouseSink) insertRows(ctx context.Context, rows []clickhouseRow) error {
+	if s.conn == nil {
+		if s.insertRowsFn == nil {
+			return fmt.Errorf("clickhouse connection is not configured")
+		}
+		return s.insertRowsFn(ctx, rows)
+	}
+
 	batch, err := s.conn.PrepareBatch(ctx, fmt.Sprintf(
 		"INSERT INTO %s.%s (id, type, source, subject, time, provider, entity_type, entity_id, action, changes, snapshot, provider_event_id, tenant_id)",
 		s.cfg.Database,
