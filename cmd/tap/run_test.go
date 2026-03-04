@@ -331,6 +331,24 @@ func TestRunAdminReplayEndpointRequiresToken(t *testing.T) {
 		t.Fatalf("ready endpoint never became healthy: %v", err)
 	}
 
+	type adminErrorResponse struct {
+		RequestID string `json:"request_id"`
+		Error     string `json:"error"`
+	}
+	readAdminError := func(resp *http.Response) adminErrorResponse {
+		t.Helper()
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatalf("read admin error response body: %v", err)
+		}
+		var out adminErrorResponse
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("decode admin error response body: %v body=%s", err, string(body))
+		}
+		return out
+	}
+
 	replayBaseURL := "http://127.0.0.1:" + intToString(port) + "/admin/replay-dlq"
 	replayURL := replayBaseURL + "?limit=1"
 	reqNoToken, _ := http.NewRequest(http.MethodPost, replayURL, nil)
@@ -342,12 +360,18 @@ func TestRunAdminReplayEndpointRequiresToken(t *testing.T) {
 		t.Fatalf("request replay without token: %v", err)
 	}
 	if got := strings.TrimSpace(respNoToken.Header.Get("X-Request-ID")); got != "replay-unauth-1" {
-		_ = respNoToken.Body.Close()
 		t.Fatalf("expected unauthorized response to echo request id, got %q", got)
 	}
-	_ = respNoToken.Body.Close()
+	if got := strings.TrimSpace(respNoToken.Header.Get("Content-Type")); !strings.Contains(got, "application/json") {
+		t.Fatalf("expected unauthorized response content-type application/json, got %q", got)
+	}
 	if respNoToken.StatusCode != http.StatusUnauthorized {
+		_ = respNoToken.Body.Close()
 		t.Fatalf("expected 401 without admin token, got %d", respNoToken.StatusCode)
+	}
+	unauthErr := readAdminError(respNoToken)
+	if unauthErr.RequestID != "replay-unauth-1" || unauthErr.Error != "unauthorized" {
+		t.Fatalf("unexpected unauthorized replay response payload: %+v", unauthErr)
 	}
 	reqInvalidLimit, _ := http.NewRequest(http.MethodPost, replayBaseURL+"?limit=invalid", nil)
 	reqInvalidLimit.Header.Set("X-Admin-Token", "test-admin-token")
@@ -359,12 +383,18 @@ func TestRunAdminReplayEndpointRequiresToken(t *testing.T) {
 		t.Fatalf("request replay with invalid limit: %v", err)
 	}
 	if got := strings.TrimSpace(respInvalidLimit.Header.Get("X-Request-ID")); got != "replay-invalid-1" {
-		_ = respInvalidLimit.Body.Close()
 		t.Fatalf("expected invalid-limit response to echo request id, got %q", got)
 	}
-	_ = respInvalidLimit.Body.Close()
+	if got := strings.TrimSpace(respInvalidLimit.Header.Get("Content-Type")); !strings.Contains(got, "application/json") {
+		t.Fatalf("expected invalid-limit response content-type application/json, got %q", got)
+	}
 	if respInvalidLimit.StatusCode != http.StatusBadRequest {
+		_ = respInvalidLimit.Body.Close()
 		t.Fatalf("expected 400 for invalid replay limit, got %d", respInvalidLimit.StatusCode)
+	}
+	invalidErr := readAdminError(respInvalidLimit)
+	if invalidErr.RequestID != "replay-invalid-1" || !strings.Contains(invalidErr.Error, "invalid limit") {
+		t.Fatalf("unexpected invalid replay response payload: %+v", invalidErr)
 	}
 
 	nc, err := nats.Connect(s.ClientURL())
@@ -671,12 +701,29 @@ func TestRunAdminPollerStatusEndpoint(t *testing.T) {
 		t.Fatalf("request poller status without token: %v", err)
 	}
 	if got := strings.TrimSpace(respNoToken.Header.Get("X-Request-ID")); got != "status-unauth-1" {
-		_ = respNoToken.Body.Close()
 		t.Fatalf("expected unauthorized status response to echo request id, got %q", got)
 	}
-	_ = respNoToken.Body.Close()
+	if got := strings.TrimSpace(respNoToken.Header.Get("Content-Type")); !strings.Contains(got, "application/json") {
+		t.Fatalf("expected unauthorized status response content-type application/json, got %q", got)
+	}
 	if respNoToken.StatusCode != http.StatusUnauthorized {
+		_ = respNoToken.Body.Close()
 		t.Fatalf("expected 401 without admin token, got %d", respNoToken.StatusCode)
+	}
+	var statusErr struct {
+		RequestID string `json:"request_id"`
+		Error     string `json:"error"`
+	}
+	statusErrBody, err := io.ReadAll(respNoToken.Body)
+	_ = respNoToken.Body.Close()
+	if err != nil {
+		t.Fatalf("read unauthorized status response body: %v", err)
+	}
+	if err := json.Unmarshal(statusErrBody, &statusErr); err != nil {
+		t.Fatalf("decode unauthorized status response body: %v body=%s", err, string(statusErrBody))
+	}
+	if statusErr.RequestID != "status-unauth-1" || statusErr.Error != "unauthorized" {
+		t.Fatalf("unexpected unauthorized status response payload: %+v", statusErr)
 	}
 
 	type pollerStatus struct {

@@ -63,12 +63,14 @@ When `server.admin_token` is set, these endpoints are available:
   - Requires header `X-Admin-Token`.
   - Supports token rotation with `server.admin_token_secondary` (either primary or secondary token is accepted). `admin_token_secondary` requires `admin_token`, and both values must differ.
   - Optional header `X-Request-ID` (echoed back in `X-Request-ID` response header and `request_id` body field).
+  - Error responses are JSON (`{"request_id":"...","error":"..."}`) for consistent automation and audit correlation.
   - `limit` must be a positive integer.
   - Replay is capped by `server.admin_replay_max_limit` (default `2000`, valid range `1..100000`); response includes `requested_limit`, `effective_limit`, `max_limit`, and `capped`. If `limit` is omitted, default replay (`100`) is still capped by `admin_replay_max_limit`.
 - `GET /admin/poller-status`
   - Requires header `X-Admin-Token`.
   - Supports token rotation with `server.admin_token_secondary`.
   - Optional header `X-Request-ID` (echoed back in `X-Request-ID` response header and `request_id` body field).
+  - Error responses are JSON (`{"request_id":"...","error":"..."}`).
   - Optional filters: `provider` (case-insensitive), `tenant`.
   - Response includes `count` and per-poller runtime fields (`interval`, rate limiter values, failure budget, circuit-break duration, jitter ratio, last run/success/error details).
   - Structured audit logs are emitted for authorized and unauthorized admin calls (`request_id`, requester IP, user-agent, path/method, and duration).

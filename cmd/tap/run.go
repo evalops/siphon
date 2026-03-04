@@ -130,7 +130,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					"user_agent", userAgent,
 					"duration_ms", time.Since(startedAt).Milliseconds(),
 				)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeAdminError(w, http.StatusUnauthorized, reqID, "unauthorized")
 				return reqID, "", false
 			}
 			return reqID, tokenSlot, true
@@ -159,7 +159,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					"error", err.Error(),
 					"duration_ms", time.Since(startedAt).Milliseconds(),
 				)
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeAdminError(w, http.StatusBadRequest, reqID, err.Error())
 				return
 			}
 			replayed, err := dlqPublisher.Replay(r.Context(), limit, func(ctx context.Context, subject string, payload []byte, dedupID string) error {
@@ -181,7 +181,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					"error", err.Error(),
 					"duration_ms", time.Since(startedAt).Milliseconds(),
 				)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeAdminError(w, http.StatusInternalServerError, reqID, err.Error())
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -368,6 +368,15 @@ func requestID(r *http.Request) string {
 		return id
 	}
 	return "admin-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
+}
+
+func writeAdminError(w http.ResponseWriter, status int, reqID, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"request_id": strings.TrimSpace(reqID),
+		"error":      strings.TrimSpace(message),
+	})
 }
 
 func openPollStores(cfg config.StateConfig) (store.CheckpointStore, store.SnapshotStore, closer, error) {
