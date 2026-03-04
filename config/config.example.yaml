@@ -1,0 +1,45 @@
+providers:
+  stripe:
+    mode: webhook
+    secret: ${STRIPE_WEBHOOK_SECRET}
+
+  github:
+    mode: webhook
+    secret: ${GITHUB_WEBHOOK_SECRET}
+    events: ["push", "pull_request", "issues", "release"]
+
+  hubspot:
+    mode: webhook+poll
+    app_id: ${HUBSPOT_APP_ID}
+    client_secret: ${HUBSPOT_CLIENT_SECRET}
+    api_key: ${HUBSPOT_API_KEY}
+    poll_interval: 60s
+
+  linear:
+    mode: webhook
+    secret: ${LINEAR_WEBHOOK_SECRET}
+
+  shopify:
+    mode: webhook
+    secret: ${SHOPIFY_WEBHOOK_SECRET}
+
+nats:
+  url: nats://localhost:4222
+  stream: ENSEMBLE_TAP
+  subject_prefix: ensemble.tap
+  max_age: 168h
+  dedup_window: 2m
+
+clickhouse:
+  addr: clickhouse:9000
+  database: ensemble
+  table: tap_events
+  batch_size: 500
+  flush_interval: 2s
+
+server:
+  port: 8080
+  base_path: /webhooks
+  read_timeout: 10s
+  write_timeout: 5s
+  max_body_size: 1048576

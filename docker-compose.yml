@@ -1,0 +1,31 @@
+services:
+  nats:
+    image: nats:2.11-alpine
+    command: -js
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+  tap:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - TAP_NATS_URL=nats://nats:4222
+      - TAP_CLICKHOUSE_ADDR=clickhouse:9000
+    depends_on:
+      - nats
+      - clickhouse
+
+volumes:
+  clickhouse-data:
