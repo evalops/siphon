@@ -72,7 +72,7 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 
 		nextURL := base + "/services/data/" + apiVersion + "/query?q=" + url.QueryEscape(soql)
 		for nextURL != "" {
-			body, err := doAuthenticatedRequest(ctx, client, &token, oauth, func(accessToken string) (*http.Request, error) {
+			body, err := doAuthenticatedRequest(ctx, client, &token, oauth, "salesforce", func(accessToken string) (*http.Request, error) {
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
 				if err != nil {
 					return nil, fmt.Errorf("build salesforce request: %w", err)

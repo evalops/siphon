@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/evalops/ensemble-tap/internal/normalize"
@@ -52,7 +53,8 @@ func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore,
 	}
 
 	provider := fetcher.ProviderName()
-	checkpoint, _ := checkpoints.Get(provider)
+	stateProvider := stateProviderKey(provider, tenantID)
+	checkpoint, _ := checkpoints.Get(stateProvider)
 
 	res, err := fetcher.Fetch(ctx, checkpoint)
 	if err != nil {
@@ -73,7 +75,7 @@ func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore,
 			entity.UpdatedAt = time.Now().UTC()
 		}
 
-		prev, exists := snapshots.Get(provider, entity.EntityType, entity.EntityID)
+		prev, exists := snapshots.Get(stateProvider, entity.EntityType, entity.EntityID)
 		changes := DiffSnapshots(prev, entity.Snapshot)
 		action := "updated"
 		if !exists {
@@ -97,11 +99,11 @@ func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore,
 		if err := sink.Publish(ctx, evt, dedup); err != nil {
 			return fmt.Errorf("publish poll event: %w", err)
 		}
-		snapshots.Put(provider, entity.EntityType, entity.EntityID, entity.Snapshot)
+		snapshots.Put(stateProvider, entity.EntityType, entity.EntityID, entity.Snapshot)
 	}
 
 	if res.NextCheckpoint != "" {
-		checkpoints.Set(provider, res.NextCheckpoint)
+		checkpoints.Set(stateProvider, res.NextCheckpoint)
 	}
 	return nil
 }
@@ -110,4 +112,13 @@ func dedupID(entity Entity, action, tenantID string) string {
 	raw := entity.Provider + "|" + tenantID + "|" + entity.EntityType + "|" + entity.EntityID + "|" + action + "|" + entity.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	sum := sha256.Sum256([]byte(raw))
 	return "poll_" + hex.EncodeToString(sum[:])
+}
+
+func stateProviderKey(provider, tenantID string) string {
+	provider = strings.TrimSpace(provider)
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return provider
+	}
+	return provider + "::" + tenantID
 }

@@ -71,7 +71,7 @@ func (q *QuickBooksFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 		query += " ORDERBY MetaData.LastUpdatedTime STARTPOSITION 1 MAXRESULTS " + strconv.Itoa(limit)
 
 		endpoint := fmt.Sprintf("%s/v3/company/%s/query?query=%s", base, q.RealmID, url.QueryEscape(query))
-		body, err := doAuthenticatedRequest(ctx, client, &token, oauth, func(accessToken string) (*http.Request, error) {
+		body, err := doAuthenticatedRequest(ctx, client, &token, oauth, "quickbooks", func(accessToken string) (*http.Request, error) {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 			if err != nil {
 				return nil, fmt.Errorf("build quickbooks request: %w", err)

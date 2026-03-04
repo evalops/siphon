@@ -61,7 +61,7 @@ func TestDoAuthenticatedRequestRefreshesToken(t *testing.T) {
 		ClientSecret: "client-secret",
 		RefreshToken: "refresh-token",
 	}
-	body, err := doAuthenticatedRequest(context.Background(), srv.Client(), &token, oauth, func(accessToken string) (*http.Request, error) {
+	body, err := doAuthenticatedRequest(context.Background(), srv.Client(), &token, oauth, "hubspot", func(accessToken string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/data", nil)
 		if err != nil {
 			return nil, err
@@ -100,7 +100,7 @@ func TestDoAuthenticatedRequestReturnsRateLimitedError(t *testing.T) {
 	defer srv.Close()
 
 	token := "token"
-	_, err := doAuthenticatedRequest(context.Background(), srv.Client(), &token, OAuthRefreshConfig{}, func(accessToken string) (*http.Request, error) {
+	_, err := doAuthenticatedRequest(context.Background(), srv.Client(), &token, OAuthRefreshConfig{}, "notion", func(accessToken string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
 		if err != nil {
 			return nil, err
@@ -115,6 +115,9 @@ func TestDoAuthenticatedRequestReturnsRateLimitedError(t *testing.T) {
 	var rl poller.RateLimitedError
 	if !errors.As(err, &rl) {
 		t.Fatalf("expected rate limited error, got %T", err)
+	}
+	if rl.Provider != "notion" {
+		t.Fatalf("expected provider name notion, got %q", rl.Provider)
 	}
 	if rl.RetryAfter != 3*time.Second {
 		t.Fatalf("expected retry-after of 3s, got %s", rl.RetryAfter)

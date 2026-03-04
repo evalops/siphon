@@ -74,7 +74,7 @@ func TestRunCycleCreatesAndUpdatesEntities(t *testing.T) {
 	if sink.events[0].dedup == "" {
 		t.Fatalf("expected dedup id")
 	}
-	if cp, ok := checkpoints.Get("hubspot"); !ok || cp == "" {
+	if cp, ok := checkpoints.Get(stateProviderKey("hubspot", "tenant-1")); !ok || cp == "" {
 		t.Fatalf("expected checkpoint to be stored")
 	}
 
@@ -104,5 +104,47 @@ func TestRunCycleCreatesAndUpdatesEntities(t *testing.T) {
 	}
 	if sink.events[0].event.Changes["stage"].From != "open" || sink.events[0].event.Changes["stage"].To != "won" {
 		t.Fatalf("unexpected stage change: %+v", sink.events[0].event.Changes)
+	}
+}
+
+func TestRunCycleIsolatesTenantState(t *testing.T) {
+	checkpoints := store.NewInMemoryCheckpointStore()
+	snapshots := store.NewInMemorySnapshotStore()
+
+	fetch := fakeFetcher{
+		provider: "hubspot",
+		result: FetchResult{
+			Entities: []Entity{{
+				Provider:   "hubspot",
+				EntityType: "deal",
+				EntityID:   "d1",
+				UpdatedAt:  time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC),
+				Snapshot:   map[string]any{"stage": "open"},
+			}},
+			NextCheckpoint: "2026-03-04T10:00:00Z",
+		},
+	}
+
+	sinkTenantA := &fakeSink{}
+	if err := RunCycle(context.Background(), fetch, checkpoints, snapshots, sinkTenantA, "tenant-a"); err != nil {
+		t.Fatalf("run cycle tenant-a: %v", err)
+	}
+	if len(sinkTenantA.events) != 1 || sinkTenantA.events[0].event.Action != "created" {
+		t.Fatalf("expected created event for tenant-a, got %+v", sinkTenantA.events)
+	}
+
+	sinkTenantB := &fakeSink{}
+	if err := RunCycle(context.Background(), fetch, checkpoints, snapshots, sinkTenantB, "tenant-b"); err != nil {
+		t.Fatalf("run cycle tenant-b: %v", err)
+	}
+	if len(sinkTenantB.events) != 1 || sinkTenantB.events[0].event.Action != "created" {
+		t.Fatalf("expected created event for tenant-b, got %+v", sinkTenantB.events)
+	}
+
+	if _, ok := checkpoints.Get(stateProviderKey("hubspot", "tenant-a")); !ok {
+		t.Fatalf("expected tenant-a checkpoint")
+	}
+	if _, ok := checkpoints.Get(stateProviderKey("hubspot", "tenant-b")); !ok {
+		t.Fatalf("expected tenant-b checkpoint")
 	}
 }

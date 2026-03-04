@@ -74,7 +74,7 @@ func (n *NotionFetcher) Fetch(ctx context.Context, checkpoint string) (poller.Fe
 		}
 		body, _ := json.Marshal(reqBody)
 
-		respBody, err := doAuthenticatedRequest(ctx, client, &token, oauth, func(accessToken string) (*http.Request, error) {
+		respBody, err := doAuthenticatedRequest(ctx, client, &token, oauth, "notion", func(accessToken string) (*http.Request, error) {
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 			if err != nil {
 				return nil, fmt.Errorf("build notion request: %w", err)

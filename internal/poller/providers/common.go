@@ -123,6 +123,7 @@ func doAuthenticatedRequest(
 	client *http.Client,
 	token *string,
 	oauth OAuthRefreshConfig,
+	provider string,
 	buildReq func(accessToken string) (*http.Request, error),
 ) ([]byte, error) {
 	perform := func(accessToken string) (*http.Response, []byte, error) {
@@ -160,8 +161,11 @@ func doAuthenticatedRequest(
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
+		if strings.TrimSpace(provider) == "" {
+			provider = "poller"
+		}
 		return nil, poller.RateLimitedError{
-			Provider:   "poller",
+			Provider:   provider,
 			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), 2*time.Second),
 		}
 	}

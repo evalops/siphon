@@ -70,7 +70,7 @@ func (h *HubSpotFetcher) Fetch(ctx context.Context, checkpoint string) (poller.F
 		body, _ := json.Marshal(reqPayload)
 
 		url := trimTrailingSlash(h.BaseURL) + "/crm/v3/objects/" + strings.TrimSpace(object) + "/search"
-		respBody, err := doAuthenticatedRequest(ctx, client, &token, oauth, func(accessToken string) (*http.Request, error) {
+		respBody, err := doAuthenticatedRequest(ctx, client, &token, oauth, "hubspot", func(accessToken string) (*http.Request, error) {
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 			if err != nil {
 				return nil, fmt.Errorf("build hubspot request: %w", err)

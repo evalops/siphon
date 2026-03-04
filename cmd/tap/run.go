@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -215,32 +216,39 @@ func startConfiguredPollers(ctx context.Context, cfg config.Config, publisher cl
 		if !modeContainsPoll(pcfg.Mode) {
 			continue
 		}
-
-		fetcher := fetcherForProvider(providerName, pcfg)
-		if fetcher == nil {
-			logger.Warn("poll mode requested but provider poller not available", "provider", providerName)
+		targets := buildPollTargets(pcfg)
+		if len(targets) == 0 {
+			logger.Warn("poll mode requested but no poll targets resolved", "provider", providerName)
 			continue
 		}
 
-		interval := pcfg.PollInterval
-		if interval <= 0 {
-			interval = time.Minute
-		}
+		for _, target := range targets {
+			fetcher := fetcherForProvider(providerName, target)
+			if fetcher == nil {
+				logger.Warn("poll mode requested but provider poller not available", "provider", providerName, "tenant", target.TenantID)
+				continue
+			}
 
-		p := &poller.Poller{
-			Provider:    fetcher.ProviderName(),
-			Interval:    interval,
-			RateLimiter: rate.NewLimiter(rate.Every(250*time.Millisecond), 1),
-			Run: func(fetcher poller.Fetcher, tenantID string) poller.PollFn {
-				return func(ctx context.Context) error {
-					return poller.RunCycle(ctx, fetcher, checkpointStore, snapshotStore, sink, tenantID)
-				}
-			}(fetcher, pcfg.TenantID),
+			interval := target.PollInterval
+			if interval <= 0 {
+				interval = time.Minute
+			}
+
+			p := &poller.Poller{
+				Provider:    fetcher.ProviderName(),
+				Interval:    interval,
+				RateLimiter: rate.NewLimiter(rate.Every(250*time.Millisecond), 1),
+				Run: func(fetcher poller.Fetcher, tenantID string) poller.PollFn {
+					return func(ctx context.Context) error {
+						return poller.RunCycle(ctx, fetcher, checkpointStore, snapshotStore, sink, tenantID)
+					}
+				}(fetcher, target.TenantID),
+			}
+			logger.Info("starting provider poller", "provider", providerName, "tenant", target.TenantID, "interval", interval.String())
+			go func(p *poller.Poller) {
+				p.Start(ctx)
+			}(p)
 		}
-		logger.Info("starting provider poller", "provider", providerName, "interval", interval.String())
-		go func(p *poller.Poller) {
-			p.Start(ctx)
-		}(p)
 	}
 }
 
@@ -253,6 +261,49 @@ func normalizeMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	mode = strings.ReplaceAll(mode, " ", "")
 	return mode
+}
+
+func buildPollTargets(base config.ProviderConfig) []config.ProviderConfig {
+	targets := make([]config.ProviderConfig, 0)
+	seen := map[string]struct{}{}
+
+	addTarget := func(candidate config.ProviderConfig) {
+		tenantID := strings.TrimSpace(candidate.TenantID)
+		key := tenantID
+		if key == "" {
+			key = "__default__"
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, candidate)
+	}
+
+	if len(base.Tenants) == 0 || hasBasePollCredentials(base) {
+		addTarget(config.ApplyProviderTenant(base, strings.TrimSpace(base.TenantID)))
+	}
+
+	if len(base.Tenants) == 0 {
+		return targets
+	}
+
+	tenantKeys := make([]string, 0, len(base.Tenants))
+	for tenantKey := range base.Tenants {
+		tenantKeys = append(tenantKeys, tenantKey)
+	}
+	sort.Strings(tenantKeys)
+	for _, tenantKey := range tenantKeys {
+		addTarget(config.ApplyProviderTenant(base, tenantKey))
+	}
+	return targets
+}
+
+func hasBasePollCredentials(cfg config.ProviderConfig) bool {
+	return strings.TrimSpace(cfg.AccessToken) != "" ||
+		strings.TrimSpace(cfg.APIKey) != "" ||
+		strings.TrimSpace(cfg.Secret) != "" ||
+		strings.TrimSpace(cfg.RefreshToken) != ""
 }
 
 func fetcherForProvider(name string, cfg config.ProviderConfig) poller.Fetcher {

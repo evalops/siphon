@@ -254,40 +254,5 @@ func (s *Server) resolveProviderConfig(provider, tenantID string) (config.Provid
 	if strings.TrimSpace(tenantID) == "" {
 		return base, true
 	}
-	if base.Tenants == nil {
-		base.TenantID = tenantID
-		return base, true
-	}
-	tenantCfg, ok := base.Tenants[tenantID]
-	if !ok {
-		base.TenantID = tenantID
-		return base, true
-	}
-	if strings.TrimSpace(tenantCfg.TenantID) != "" {
-		base.TenantID = tenantCfg.TenantID
-	} else {
-		base.TenantID = tenantID
-	}
-	if strings.TrimSpace(tenantCfg.Secret) != "" {
-		base.Secret = tenantCfg.Secret
-	}
-	if strings.TrimSpace(tenantCfg.ClientSecret) != "" {
-		base.ClientSecret = tenantCfg.ClientSecret
-	}
-	if strings.TrimSpace(tenantCfg.AccessToken) != "" {
-		base.AccessToken = tenantCfg.AccessToken
-	}
-	if strings.TrimSpace(tenantCfg.APIKey) != "" {
-		base.APIKey = tenantCfg.APIKey
-	}
-	if strings.TrimSpace(tenantCfg.BaseURL) != "" {
-		base.BaseURL = tenantCfg.BaseURL
-	}
-	if strings.TrimSpace(tenantCfg.RealmID) != "" {
-		base.RealmID = tenantCfg.RealmID
-	}
-	if strings.TrimSpace(tenantCfg.RefreshToken) != "" {
-		base.RefreshToken = tenantCfg.RefreshToken
-	}
-	return base, true
+	return config.ApplyProviderTenant(base, tenantID), true
 }

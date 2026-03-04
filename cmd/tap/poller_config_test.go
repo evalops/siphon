@@ -81,3 +81,56 @@ func TestOpenPollStores(t *testing.T) {
 		t.Fatalf("expected unsupported backend error")
 	}
 }
+
+func TestBuildPollTargetsBaseOnly(t *testing.T) {
+	base := config.ProviderConfig{
+		TenantID: "tenant-base",
+	}
+	targets := buildPollTargets(base)
+	if len(targets) != 1 {
+		t.Fatalf("expected one base target, got %d", len(targets))
+	}
+	if targets[0].TenantID != "tenant-base" {
+		t.Fatalf("unexpected tenant id: %q", targets[0].TenantID)
+	}
+}
+
+func TestBuildPollTargetsTenantOverridesWithoutBaseCredentials(t *testing.T) {
+	base := config.ProviderConfig{
+		Tenants: map[string]config.ProviderTenantConfig{
+			"tenant-b": {AccessToken: "token-b"},
+			"tenant-a": {AccessToken: "token-a"},
+		},
+	}
+
+	targets := buildPollTargets(base)
+	if len(targets) != 2 {
+		t.Fatalf("expected two tenant targets, got %d", len(targets))
+	}
+	if targets[0].TenantID != "tenant-a" || targets[0].AccessToken != "token-a" {
+		t.Fatalf("unexpected first target: %+v", targets[0])
+	}
+	if targets[1].TenantID != "tenant-b" || targets[1].AccessToken != "token-b" {
+		t.Fatalf("unexpected second target: %+v", targets[1])
+	}
+}
+
+func TestBuildPollTargetsIncludesBaseWhenCredentialsPresent(t *testing.T) {
+	base := config.ProviderConfig{
+		AccessToken: "base-token",
+		Tenants: map[string]config.ProviderTenantConfig{
+			"tenant-a": {AccessToken: "token-a"},
+		},
+	}
+
+	targets := buildPollTargets(base)
+	if len(targets) != 2 {
+		t.Fatalf("expected base + tenant targets, got %d", len(targets))
+	}
+	if targets[0].TenantID != "" || targets[0].AccessToken != "base-token" {
+		t.Fatalf("unexpected base target: %+v", targets[0])
+	}
+	if targets[1].TenantID != "tenant-a" || targets[1].AccessToken != "token-a" {
+		t.Fatalf("unexpected tenant target: %+v", targets[1])
+	}
+}
