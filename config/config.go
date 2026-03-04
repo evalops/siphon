@@ -32,6 +32,9 @@ type ProviderConfig struct {
 	PollInterval         time.Duration                   `koanf:"poll_interval"`
 	PollRateLimitPerSec  float64                         `koanf:"poll_rate_limit_per_sec"`
 	PollBurst            int                             `koanf:"poll_burst"`
+	PollFailureBudget    int                             `koanf:"poll_failure_budget"`
+	PollCircuitBreak     time.Duration                   `koanf:"poll_circuit_break_duration"`
+	PollJitterRatio      float64                         `koanf:"poll_jitter_ratio"`
 	BaseURL              string                          `koanf:"base_url"`
 	AccessToken          string                          `koanf:"access_token"`
 	Objects              []string                        `koanf:"objects"`
@@ -62,6 +65,9 @@ type ProviderTenantConfig struct {
 	PollInterval        time.Duration `koanf:"poll_interval"`
 	PollRateLimitPerSec float64       `koanf:"poll_rate_limit_per_sec"`
 	PollBurst           int           `koanf:"poll_burst"`
+	PollFailureBudget   int           `koanf:"poll_failure_budget"`
+	PollCircuitBreak    time.Duration `koanf:"poll_circuit_break_duration"`
+	PollJitterRatio     float64       `koanf:"poll_jitter_ratio"`
 }
 
 type NATSConfig struct {

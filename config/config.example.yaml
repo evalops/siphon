@@ -22,6 +22,9 @@ providers:
     poll_interval: 60s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_failure_budget: 6
+    poll_circuit_break_duration: 45s
+    poll_jitter_ratio: 0.15
     tenants:
       tenant-a:
         secret: ${HUBSPOT_TENANT_A_WEBHOOK_SECRET}
@@ -30,6 +33,9 @@ providers:
         poll_interval: 30s
         poll_rate_limit_per_sec: 8
         poll_burst: 2
+        poll_failure_budget: 8
+        poll_circuit_break_duration: 60s
+        poll_jitter_ratio: 0.25
 
   salesforce:
     mode: poll
@@ -45,6 +51,9 @@ providers:
     poll_interval: 60s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_failure_budget: 5
+    poll_circuit_break_duration: 30s
+    poll_jitter_ratio: 0.1
 
   quickbooks:
     mode: poll
@@ -60,6 +69,9 @@ providers:
     poll_interval: 120s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_failure_budget: 5
+    poll_circuit_break_duration: 30s
+    poll_jitter_ratio: 0.1
 
   notion:
     mode: poll
@@ -73,6 +85,9 @@ providers:
     poll_interval: 120s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_failure_budget: 5
+    poll_circuit_break_duration: 30s
+    poll_jitter_ratio: 0.1
 
   linear:
     mode: webhook

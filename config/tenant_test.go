@@ -17,6 +17,9 @@ func TestApplyProviderTenantOverridesFields(t *testing.T) {
 		PollInterval:        60 * time.Second,
 		PollRateLimitPerSec: 2.0,
 		PollBurst:           1,
+		PollFailureBudget:   3,
+		PollCircuitBreak:    20 * time.Second,
+		PollJitterRatio:     0.2,
 		TenantID:            "base-tenant",
 		Tenants: map[string]ProviderTenantConfig{
 			"tenant-a": {
@@ -31,6 +34,9 @@ func TestApplyProviderTenantOverridesFields(t *testing.T) {
 				PollInterval:        30 * time.Second,
 				PollRateLimitPerSec: 6.0,
 				PollBurst:           3,
+				PollFailureBudget:   7,
+				PollCircuitBreak:    45 * time.Second,
+				PollJitterRatio:     0.35,
 			},
 		},
 	}
@@ -50,6 +56,9 @@ func TestApplyProviderTenantOverridesFields(t *testing.T) {
 	}
 	if merged.PollInterval != 30*time.Second || merged.PollRateLimitPerSec != 6.0 || merged.PollBurst != 3 {
 		t.Fatalf("tenant poll settings were not applied: %+v", merged)
+	}
+	if merged.PollFailureBudget != 7 || merged.PollCircuitBreak != 45*time.Second || merged.PollJitterRatio != 0.35 {
+		t.Fatalf("tenant resilience settings were not applied: %+v", merged)
 	}
 	if merged.Tenants != nil {
 		t.Fatalf("merged config should not carry tenant map")

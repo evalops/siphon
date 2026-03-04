@@ -101,9 +101,12 @@ func TestBuildPollTargetsTenantOverridesWithoutBaseCredentials(t *testing.T) {
 		PollInterval:        60 * time.Second,
 		PollRateLimitPerSec: 4.0,
 		PollBurst:           1,
+		PollFailureBudget:   5,
+		PollCircuitBreak:    30 * time.Second,
+		PollJitterRatio:     0.1,
 		Tenants: map[string]config.ProviderTenantConfig{
-			"tenant-b": {AccessToken: "token-b", PollInterval: 30 * time.Second, PollRateLimitPerSec: 2.0, PollBurst: 2},
-			"tenant-a": {AccessToken: "token-a", PollInterval: 15 * time.Second, PollRateLimitPerSec: 8.0, PollBurst: 4},
+			"tenant-b": {AccessToken: "token-b", PollInterval: 30 * time.Second, PollRateLimitPerSec: 2.0, PollBurst: 2, PollFailureBudget: 4, PollCircuitBreak: 20 * time.Second, PollJitterRatio: 0.2},
+			"tenant-a": {AccessToken: "token-a", PollInterval: 15 * time.Second, PollRateLimitPerSec: 8.0, PollBurst: 4, PollFailureBudget: 7, PollCircuitBreak: 45 * time.Second, PollJitterRatio: 0.35},
 		},
 	}
 
@@ -117,11 +120,17 @@ func TestBuildPollTargetsTenantOverridesWithoutBaseCredentials(t *testing.T) {
 	if targets[0].PollInterval != 15*time.Second || targets[0].PollRateLimitPerSec != 8.0 || targets[0].PollBurst != 4 {
 		t.Fatalf("unexpected tenant-a poll settings: %+v", targets[0])
 	}
+	if targets[0].PollFailureBudget != 7 || targets[0].PollCircuitBreak != 45*time.Second || targets[0].PollJitterRatio != 0.35 {
+		t.Fatalf("unexpected tenant-a resilience settings: %+v", targets[0])
+	}
 	if targets[1].TenantID != "tenant-b" || targets[1].AccessToken != "token-b" {
 		t.Fatalf("unexpected second target: %+v", targets[1])
 	}
 	if targets[1].PollInterval != 30*time.Second || targets[1].PollRateLimitPerSec != 2.0 || targets[1].PollBurst != 2 {
 		t.Fatalf("unexpected tenant-b poll settings: %+v", targets[1])
+	}
+	if targets[1].PollFailureBudget != 4 || targets[1].PollCircuitBreak != 20*time.Second || targets[1].PollJitterRatio != 0.2 {
+		t.Fatalf("unexpected tenant-b resilience settings: %+v", targets[1])
 	}
 }
 
@@ -160,5 +169,21 @@ func TestPollLimiterDefaultsAndOverrides(t *testing.T) {
 	}
 	if customLimiter.Limit() != 12.5 || customLimiter.Burst() != 7 {
 		t.Fatalf("unexpected custom limiter config: limit=%v burst=%d", customLimiter.Limit(), customLimiter.Burst())
+	}
+}
+
+func TestPollResilienceDefaultsAndOverrides(t *testing.T) {
+	failureBudget, circuitBreak, jitter := pollResilience(config.ProviderConfig{})
+	if failureBudget != 5 || circuitBreak != 30*time.Second || jitter != 0 {
+		t.Fatalf("unexpected defaults: failureBudget=%d circuitBreak=%s jitter=%v", failureBudget, circuitBreak, jitter)
+	}
+
+	failureBudget, circuitBreak, jitter = pollResilience(config.ProviderConfig{
+		PollFailureBudget: 9,
+		PollCircuitBreak:  50 * time.Second,
+		PollJitterRatio:   0.4,
+	})
+	if failureBudget != 9 || circuitBreak != 50*time.Second || jitter != 0.4 {
+		t.Fatalf("unexpected overrides: failureBudget=%d circuitBreak=%s jitter=%v", failureBudget, circuitBreak, jitter)
 	}
 }

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +32,11 @@ import (
 type readiness interface {
 	Ready() error
 }
+
+const (
+	defaultReplayDLQLimit = 100
+	maxReplayDLQLimit     = 2000
+)
 
 func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if logger == nil {
@@ -85,7 +92,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if strings.TrimSpace(cfg.Server.AdminToken) != "" {
 		adminToken := strings.TrimSpace(cfg.Server.AdminToken)
 		requireAdminToken := func(w http.ResponseWriter, r *http.Request) bool {
-			if strings.TrimSpace(r.Header.Get("X-Admin-Token")) != adminToken {
+			if !secureTokenEqual(strings.TrimSpace(r.Header.Get("X-Admin-Token")), adminToken) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return false
 			}
@@ -96,11 +103,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			if !requireAdminToken(w, r) {
 				return
 			}
-			limit := 100
-			if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-				if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-					limit = parsed
-				}
+			requestedLimit, limit, capped, err := parseReplayDLQLimit(r.URL.Query().Get("limit"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
 			}
 			replayed, err := dlqPublisher.Replay(r.Context(), limit, func(ctx context.Context, subject string, payload []byte, dedupID string) error {
 				return publisher.PublishRaw(ctx, subject, payload, dedupID)
@@ -110,16 +116,31 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"replayed": replayed})
+			response := map[string]any{
+				"replayed":        replayed,
+				"effective_limit": limit,
+				"max_limit":       maxReplayDLQLimit,
+				"capped":          capped,
+			}
+			if requestedLimit > 0 {
+				response["requested_limit"] = requestedLimit
+			}
+			_ = json.NewEncoder(w).Encode(response)
 		})
 		mux.HandleFunc("GET /admin/poller-status", func(w http.ResponseWriter, r *http.Request) {
 			if !requireAdminToken(w, r) {
 				return
 			}
+			providerFilter := strings.TrimSpace(r.URL.Query().Get("provider"))
+			tenantFilter := strings.TrimSpace(r.URL.Query().Get("tenant"))
+			statuses := pollerStatuses.SnapshotFiltered(providerFilter, tenantFilter)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"generated_at": time.Now().UTC(),
-				"pollers":      pollerStatuses.Snapshot(),
+				"provider":     providerFilter,
+				"tenant":       tenantFilter,
+				"count":        len(statuses),
+				"pollers":      statuses,
 			})
 		})
 	}
@@ -154,6 +175,38 @@ type closer interface {
 	Close() error
 }
 
+func secureTokenEqual(actual, expected string) bool {
+	actual = strings.TrimSpace(actual)
+	expected = strings.TrimSpace(expected)
+	if actual == "" || expected == "" {
+		return false
+	}
+	actualHash := sha256.Sum256([]byte(actual))
+	expectedHash := sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(actualHash[:], expectedHash[:]) == 1
+}
+
+func parseReplayDLQLimit(raw string) (requested int, effective int, capped bool, err error) {
+	raw = strings.TrimSpace(raw)
+	effective = defaultReplayDLQLimit
+	if raw == "" {
+		return 0, effective, false, nil
+	}
+	requested, err = strconv.Atoi(raw)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("invalid limit %q: must be a positive integer", raw)
+	}
+	if requested <= 0 {
+		return 0, 0, false, fmt.Errorf("invalid limit %q: must be greater than 0", raw)
+	}
+	effective = requested
+	if effective > maxReplayDLQLimit {
+		effective = maxReplayDLQLimit
+		capped = true
+	}
+	return requested, effective, capped, nil
+}
+
 func openPollStores(cfg config.StateConfig) (store.CheckpointStore, store.SnapshotStore, closer, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Backend)) {
 	case "", "memory", "inmemory":
@@ -182,6 +235,9 @@ type pollerStatusSnapshot struct {
 	Interval            string    `json:"interval"`
 	RateLimitPerSec     float64   `json:"rate_limit_per_sec"`
 	Burst               int       `json:"burst"`
+	FailureBudget       int       `json:"failure_budget"`
+	CircuitBreak        string    `json:"circuit_break_duration"`
+	JitterRatio         float64   `json:"jitter_ratio"`
 	LastRunAt           time.Time `json:"last_run_at,omitempty"`
 	LastSuccessAt       time.Time `json:"last_success_at,omitempty"`
 	LastErrorAt         time.Time `json:"last_error_at,omitempty"`
@@ -195,7 +251,7 @@ type pollerStatusEntry struct {
 	snapshot pollerStatusSnapshot
 }
 
-func newPollerStatusEntry(provider, tenantID string, interval time.Duration, rateLimitPerSec float64, burst int) *pollerStatusEntry {
+func newPollerStatusEntry(provider, tenantID string, interval time.Duration, rateLimitPerSec float64, burst int, failureBudget int, circuitBreak time.Duration, jitterRatio float64) *pollerStatusEntry {
 	return &pollerStatusEntry{
 		snapshot: pollerStatusSnapshot{
 			Provider:        provider,
@@ -203,6 +259,9 @@ func newPollerStatusEntry(provider, tenantID string, interval time.Duration, rat
 			Interval:        interval.String(),
 			RateLimitPerSec: rateLimitPerSec,
 			Burst:           burst,
+			FailureBudget:   failureBudget,
+			CircuitBreak:    circuitBreak.String(),
+			JitterRatio:     jitterRatio,
 		},
 	}
 }
@@ -263,7 +322,7 @@ func newPollerStatusRegistry() *pollerStatusRegistry {
 	return &pollerStatusRegistry{entries: map[string]*pollerStatusEntry{}}
 }
 
-func (r *pollerStatusRegistry) upsert(provider, tenantID string, interval time.Duration, rateLimitPerSec float64, burst int) *pollerStatusEntry {
+func (r *pollerStatusRegistry) upsert(provider, tenantID string, interval time.Duration, rateLimitPerSec float64, burst int, failureBudget int, circuitBreak time.Duration, jitterRatio float64) *pollerStatusEntry {
 	if r == nil {
 		return nil
 	}
@@ -272,7 +331,7 @@ func (r *pollerStatusRegistry) upsert(provider, tenantID string, interval time.D
 	defer r.mu.Unlock()
 	entry, ok := r.entries[key]
 	if !ok {
-		entry = newPollerStatusEntry(provider, tenantID, interval, rateLimitPerSec, burst)
+		entry = newPollerStatusEntry(provider, tenantID, interval, rateLimitPerSec, burst, failureBudget, circuitBreak, jitterRatio)
 		r.entries[key] = entry
 		return entry
 	}
@@ -280,6 +339,9 @@ func (r *pollerStatusRegistry) upsert(provider, tenantID string, interval time.D
 	entry.snapshot.Interval = interval.String()
 	entry.snapshot.RateLimitPerSec = rateLimitPerSec
 	entry.snapshot.Burst = burst
+	entry.snapshot.FailureBudget = failureBudget
+	entry.snapshot.CircuitBreak = circuitBreak.String()
+	entry.snapshot.JitterRatio = jitterRatio
 	entry.mu.Unlock()
 	return entry
 }
@@ -302,6 +364,26 @@ func (r *pollerStatusRegistry) Snapshot() []pollerStatusSnapshot {
 		return out[i].Provider < out[j].Provider
 	})
 	return out
+}
+
+func (r *pollerStatusRegistry) SnapshotFiltered(provider, tenantID string) []pollerStatusSnapshot {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	tenantID = strings.TrimSpace(tenantID)
+	snapshots := r.Snapshot()
+	if provider == "" && tenantID == "" {
+		return snapshots
+	}
+	filtered := make([]pollerStatusSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if provider != "" && !strings.EqualFold(snapshot.Provider, provider) {
+			continue
+		}
+		if tenantID != "" && snapshot.TenantID != tenantID {
+			continue
+		}
+		filtered = append(filtered, snapshot)
+	}
+	return filtered
 }
 
 type cloudEventPublisher interface {
@@ -381,14 +463,18 @@ func startConfiguredPollers(ctx context.Context, cfg config.Config, publisher cl
 			if interval <= 0 {
 				interval = time.Minute
 			}
+			failureBudget, circuitBreakDuration, jitterRatio := pollResilience(target)
 			limiter, limitPerSec, burst := pollLimiter(target)
-			statusEntry := statuses.upsert(fetcher.ProviderName(), target.TenantID, interval, limitPerSec, burst)
+			statusEntry := statuses.upsert(fetcher.ProviderName(), target.TenantID, interval, limitPerSec, burst, failureBudget, circuitBreakDuration, jitterRatio)
 			stateKey := poller.StateKey(fetcher.ProviderName(), target.TenantID)
 
 			p := &poller.Poller{
-				Provider:    fetcher.ProviderName(),
-				Interval:    interval,
-				RateLimiter: limiter,
+				Provider:             fetcher.ProviderName(),
+				Interval:             interval,
+				RateLimiter:          limiter,
+				FailureBudget:        failureBudget,
+				CircuitBreakDuration: circuitBreakDuration,
+				JitterRatio:          jitterRatio,
 				Run: func(fetcher poller.Fetcher, tenantID string, statusEntry *pollerStatusEntry, stateKey string) poller.PollFn {
 					return func(ctx context.Context) error {
 						checkpointBefore, _ := checkpointStore.Get(stateKey)
@@ -477,6 +563,27 @@ func pollLimiter(cfg config.ProviderConfig) (*rate.Limiter, float64, int) {
 		burst = 1
 	}
 	return rate.NewLimiter(rate.Limit(limitPerSec), burst), limitPerSec, burst
+}
+
+func pollResilience(cfg config.ProviderConfig) (failureBudget int, circuitBreakDuration time.Duration, jitterRatio float64) {
+	failureBudget = cfg.PollFailureBudget
+	if failureBudget <= 0 {
+		failureBudget = 5
+	}
+
+	circuitBreakDuration = cfg.PollCircuitBreak
+	if circuitBreakDuration <= 0 {
+		circuitBreakDuration = 30 * time.Second
+	}
+
+	jitterRatio = cfg.PollJitterRatio
+	if jitterRatio < 0 {
+		jitterRatio = 0
+	}
+	if jitterRatio > 0.95 {
+		jitterRatio = 0.95
+	}
+	return failureBudget, circuitBreakDuration, jitterRatio
 }
 
 func fetcherForProvider(name string, cfg config.ProviderConfig) poller.Fetcher {

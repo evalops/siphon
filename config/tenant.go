@@ -53,6 +53,15 @@ func ApplyProviderTenant(base ProviderConfig, tenantKey string) ProviderConfig {
 	if tenantCfg.PollBurst > 0 {
 		out.PollBurst = tenantCfg.PollBurst
 	}
+	if tenantCfg.PollFailureBudget > 0 {
+		out.PollFailureBudget = tenantCfg.PollFailureBudget
+	}
+	if tenantCfg.PollCircuitBreak > 0 {
+		out.PollCircuitBreak = tenantCfg.PollCircuitBreak
+	}
+	if tenantCfg.PollJitterRatio > 0 {
+		out.PollJitterRatio = tenantCfg.PollJitterRatio
+	}
 	out.Tenants = nil
 	return out
 }

@@ -8,14 +8,14 @@ Ensemble Tap is a standalone Go service that ingests SaaS webhook events, normal
 - Multi-tenant webhook routing via `POST /webhooks/{provider}` and `POST /webhooks/{provider}/{tenant}`.
 - Polling engine with provider pollers for HubSpot, Salesforce, QuickBooks, and Notion.
 - Poll-mode supports tenant fan-out from provider tenant overrides with tenant-scoped state tracking.
-- Poll config supports per-tenant `poll_interval`, `poll_rate_limit_per_sec`, and `poll_burst` overrides.
+- Poll config supports per-tenant `poll_interval`, `poll_rate_limit_per_sec`, `poll_burst`, `poll_failure_budget`, `poll_circuit_break_duration`, and `poll_jitter_ratio` overrides.
 - Durable poll state backends (`memory` or `sqlite`).
 - CloudEvents normalization and schema validation (`tapversion=v1`).
 - NATS JetStream publisher with dedup IDs and optional tenant-scoped subjects.
 - Optional ClickHouse sink consuming from NATS with batched inserts.
 - Dead-letter queue recording for verification/normalization/publish failures.
-- Admin DLQ replay endpoint: `POST /admin/replay-dlq?limit=100` guarded by `X-Admin-Token`.
-- Admin poller runtime status endpoint: `GET /admin/poller-status` guarded by `X-Admin-Token`.
+- Admin DLQ replay endpoint: `POST /admin/replay-dlq?limit=100` guarded by `X-Admin-Token`, with request validation and max replay cap metadata.
+- Admin poller runtime status endpoint: `GET /admin/poller-status` guarded by `X-Admin-Token`, with optional `provider` and `tenant` filters.
 - Health and observability endpoints:
   - `GET /livez`
   - `GET /readyz`
@@ -54,6 +54,19 @@ go run ./cmd/tap -config ./config.yaml
 
 - `state.backend=memory` keeps checkpoints/snapshots in memory.
 - `state.backend=sqlite` persists poll state to `state.sqlite_path`.
+
+## Admin Endpoints
+
+When `server.admin_token` is set, these endpoints are available:
+
+- `POST /admin/replay-dlq?limit=100`
+  - Requires header `X-Admin-Token`.
+  - `limit` must be a positive integer.
+  - Replay is capped at `2000` per request; response includes `requested_limit`, `effective_limit`, `max_limit`, and `capped`.
+- `GET /admin/poller-status`
+  - Requires header `X-Admin-Token`.
+  - Optional filters: `provider` (case-insensitive), `tenant`.
+  - Response includes `count` and per-poller runtime fields (`interval`, rate limiter values, failure budget, circuit-break duration, jitter ratio, last run/success/error details).
 
 ## Kubernetes
 
