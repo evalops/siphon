@@ -120,11 +120,20 @@ server:
   max_body_size: 1048576
   admin_token: ${TAP_ADMIN_TOKEN}
   admin_token_secondary: ${TAP_ADMIN_TOKEN_SECONDARY}
+  admin_token_read: ${TAP_ADMIN_TOKEN_READ}
+  admin_token_replay: ${TAP_ADMIN_TOKEN_REPLAY}
+  admin_token_cancel: ${TAP_ADMIN_TOKEN_CANCEL}
   admin_replay_max_limit: 2000
   admin_replay_job_ttl: 24h
   admin_replay_job_max_jobs: 512
   admin_replay_job_timeout: 5m
   admin_replay_max_concurrent_jobs: 2
+  admin_replay_store_backend: memory
+  admin_replay_sqlite_path: ./data/tap-admin-replay.db
+  admin_replay_require_reason: false
+  admin_replay_reason_min_length: 12
+  admin_replay_max_queued_per_ip: 100
+  admin_replay_max_queued_per_token: 20
   admin_rate_limit_per_sec: 5
   admin_rate_limit_burst: 20
   admin_allowed_cidrs: []

@@ -16,6 +16,18 @@
               "type": "string",
               "description": "Optional secondary admin token used during rotation."
             },
+            "admin_token_read": {
+              "type": "string",
+              "description": "Optional read-scope token for admin list/status endpoints."
+            },
+            "admin_token_replay": {
+              "type": "string",
+              "description": "Optional replay-scope token for POST /admin/replay-dlq."
+            },
+            "admin_token_cancel": {
+              "type": "string",
+              "description": "Optional cancel-scope token for DELETE /admin/replay-dlq/{job_id}."
+            },
             "admin_replay_max_limit": {
               "type": "integer",
               "minimum": 1,
@@ -41,6 +53,36 @@
               "minimum": 1,
               "maximum": 100,
               "description": "Maximum replay jobs executing concurrently."
+            },
+            "admin_replay_store_backend": {
+              "type": "string",
+              "enum": ["memory", "sqlite"],
+              "description": "Replay job metadata backend."
+            },
+            "admin_replay_sqlite_path": {
+              "type": "string",
+              "description": "SQLite database path used when replay store backend is sqlite."
+            },
+            "admin_replay_require_reason": {
+              "type": "boolean",
+              "description": "Require X-Admin-Reason header on replay/cancel requests."
+            },
+            "admin_replay_reason_min_length": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Minimum X-Admin-Reason length when provided (and when required)."
+            },
+            "admin_replay_max_queued_per_ip": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "description": "Maximum queued replay jobs allowed per requester IP."
+            },
+            "admin_replay_max_queued_per_token": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "description": "Maximum queued replay jobs allowed per admin token fingerprint."
             },
             "admin_rate_limit_per_sec": {
               "type": "number",
@@ -82,6 +124,23 @@
               "then": {
                 "properties": {
                   "admin_token": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "admin_replay_store_backend": {
+                    "const": "sqlite"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "admin_replay_sqlite_path": {
                     "type": "string",
                     "minLength": 1
                   }

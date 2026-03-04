@@ -61,12 +61,19 @@ go run ./cmd/tap -config ./config.yaml
 
 ## Admin Endpoints
 
-When `server.admin_token` is set, these endpoints are available:
+When any admin token is configured (`server.admin_token`, `server.admin_token_secondary`, `server.admin_token_read`, `server.admin_token_replay`, `server.admin_token_cancel`), these endpoints are available:
 
 - `POST /admin/replay-dlq?limit=100`
-  - Requires header `X-Admin-Token`.
-  - Supports token rotation with `server.admin_token_secondary` (either primary or secondary token is accepted). `admin_token_secondary` requires `admin_token`, and both values must differ.
+  - Requires header `X-Admin-Token` with replay permission (`server.admin_token` / `server.admin_token_secondary` or `server.admin_token_replay`).
+  - Supports token rotation with `server.admin_token_secondary` (`admin_token_secondary` requires `admin_token`, and both values must differ).
+  - Optional least-privilege role tokens:
+    - `server.admin_token_read`: read/list/status access.
+    - `server.admin_token_replay`: replay submit access.
+    - `server.admin_token_cancel`: cancel access.
   - Optional header `Idempotency-Key` to reuse an existing equivalent replay job instead of creating duplicates (`409` if reused with different `limit`/`dry_run` parameters).
+  - Optional/required (configurable) header `X-Admin-Reason`:
+    - Required when `server.admin_replay_require_reason=true`.
+    - Minimum length enforced by `server.admin_replay_reason_min_length` (default `12`).
   - Optional header `X-Request-ID` (echoed back in `X-Request-ID` response header and `request_id` body field).
   - Error responses are JSON (`{"request_id":"...","error":"..."}`) for consistent automation and audit correlation.
   - Admin endpoints are token-bucket rate-limited (`server.admin_rate_limit_per_sec`, `server.admin_rate_limit_burst`) and return `429` with `Retry-After`.
@@ -74,20 +81,22 @@ When `server.admin_token` is set, these endpoints are available:
   - `limit` must be a positive integer.
   - `dry_run=true` computes replayable count without consuming DLQ entries.
   - Replay is capped by `server.admin_replay_max_limit` (default `2000`, valid range `1..100000`); accepted response includes replay job metadata (`job_id`, `status`, `effective_limit`, `max_limit`, `capped`, `dry_run`).
-  - Replay job metadata retention/capacity is configurable (`server.admin_replay_job_ttl`, `server.admin_replay_job_max_jobs`).
+  - Replay job metadata retention/capacity is configurable (`server.admin_replay_job_ttl`, `server.admin_replay_job_max_jobs`), and backend is configurable (`server.admin_replay_store_backend=memory|sqlite`, `server.admin_replay_sqlite_path`).
   - Replay execution is configurable (`server.admin_replay_job_timeout`, `server.admin_replay_max_concurrent_jobs`) for bounded runtime and concurrency.
+  - Queue fan-out safety rails are configurable (`server.admin_replay_max_queued_per_ip`, `server.admin_replay_max_queued_per_token`) and return `409` when exceeded.
 - `GET /admin/replay-dlq`
-  - Requires header `X-Admin-Token`.
+  - Requires header `X-Admin-Token` with read permission (`admin_token`/`admin_token_secondary`/`admin_token_read`/`admin_token_replay`/`admin_token_cancel`).
   - Optional query params: `status` (`queued|running|succeeded|failed|cancelled`), `limit` (max `500`, default `50`), and `cursor` (from prior `next_cursor`).
   - Returns replay job list plus per-status summary counts and pagination cursors for queue introspection.
 - `GET /admin/replay-dlq/{job_id}`
-  - Requires header `X-Admin-Token`.
-  - Returns current replay job state (`queued`, `running`, `succeeded`, `failed`, `cancelled`) and result fields (`replayed`, `error`).
+  - Requires header `X-Admin-Token` with read permission.
+  - Returns current replay job state (`queued`, `running`, `succeeded`, `failed`, `cancelled`) and result fields (`replayed`, `error`, `operator_reason`, `cancel_reason`).
 - `DELETE /admin/replay-dlq/{job_id}`
-  - Requires header `X-Admin-Token`.
+  - Requires header `X-Admin-Token` with cancel permission (`server.admin_token`/`server.admin_token_secondary` or `server.admin_token_cancel`).
+  - Optional/required (configurable) header `X-Admin-Reason` (same requirement rules as replay endpoint).
   - Cancels replay jobs that are still `queued`; returns `409` if the job is already `running` or completed.
 - `GET /admin/poller-status`
-  - Requires header `X-Admin-Token`.
+  - Requires header `X-Admin-Token` with read permission.
   - Supports token rotation with `server.admin_token_secondary`.
   - Optional header `X-Request-ID` (echoed back in `X-Request-ID` response header and `request_id` body field).
   - Error responses are JSON (`{"request_id":"...","error":"..."}`).
@@ -106,12 +115,14 @@ When `server.admin_token` is set, these endpoints are available:
 # Replay DLQ with explicit request id
 curl -i -X POST 'http://localhost:8080/admin/replay-dlq?limit=50' \
   -H 'X-Admin-Token: your-admin-token' \
+  -H 'X-Admin-Reason: replay after incident #1234' \
   -H 'Idempotency-Key: replay-tenant-a-20260304' \
   -H 'X-Request-ID: replay-manual-001'
 
 # Replay dry-run
 curl -i -X POST 'http://localhost:8080/admin/replay-dlq?limit=200&dry_run=true' \
   -H 'X-Admin-Token: your-admin-token' \
+  -H 'X-Admin-Reason: estimate replay volume before run' \
   -H 'X-Request-ID: replay-dry-run-001'
 
 # Replay job list (latest succeeded jobs)
@@ -132,6 +143,7 @@ curl -i 'http://localhost:8080/admin/replay-dlq/replay_1234567890_1' \
 # Cancel queued replay job
 curl -i -X DELETE 'http://localhost:8080/admin/replay-dlq/replay_1234567890_1' \
   -H 'X-Admin-Token: your-admin-token' \
+  -H 'X-Admin-Reason: duplicate replay request queued' \
   -H 'X-Request-ID: replay-cancel-001'
 
 # Poller status (filtered)

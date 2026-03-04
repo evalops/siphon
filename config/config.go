@@ -24,6 +24,12 @@ const (
 	defaultAdminReplayJobTimeout = 5 * time.Minute
 	defaultAdminReplayConcurrent = 2
 	maxAdminReplayConcurrent     = 100
+	defaultAdminReplayStore      = "memory"
+	defaultAdminReplaySQLitePath = "tap-admin-replay.db"
+	defaultAdminReplayReasonMin  = 12
+	defaultAdminReplayQueuedIP   = 100
+	defaultAdminReplayQueuedTok  = 20
+	maxAdminReplayQueuedLimit    = 100000
 	defaultAdminRateLimitPerSec  = 5.0
 	defaultAdminRateLimitBurst   = 20
 )
@@ -106,11 +112,20 @@ type ServerConfig struct {
 	MaxBodySize               int64         `koanf:"max_body_size"`
 	AdminToken                string        `koanf:"admin_token"`
 	AdminTokenSecondary       string        `koanf:"admin_token_secondary"`
+	AdminTokenRead            string        `koanf:"admin_token_read"`
+	AdminTokenReplay          string        `koanf:"admin_token_replay"`
+	AdminTokenCancel          string        `koanf:"admin_token_cancel"`
 	AdminReplayMaxLimit       int           `koanf:"admin_replay_max_limit"`
 	AdminReplayJobTTL         time.Duration `koanf:"admin_replay_job_ttl"`
 	AdminReplayJobMaxJobs     int           `koanf:"admin_replay_job_max_jobs"`
 	AdminReplayJobTimeout     time.Duration `koanf:"admin_replay_job_timeout"`
 	AdminReplayMaxConcurrent  int           `koanf:"admin_replay_max_concurrent_jobs"`
+	AdminReplayStoreBackend   string        `koanf:"admin_replay_store_backend"`
+	AdminReplaySQLitePath     string        `koanf:"admin_replay_sqlite_path"`
+	AdminReplayRequireReason  bool          `koanf:"admin_replay_require_reason"`
+	AdminReplayReasonMinLen   int           `koanf:"admin_replay_reason_min_length"`
+	AdminReplayMaxQueuedPerIP int           `koanf:"admin_replay_max_queued_per_ip"`
+	AdminReplayMaxQueuedToken int           `koanf:"admin_replay_max_queued_per_token"`
 	AdminRateLimitPerSec      float64       `koanf:"admin_rate_limit_per_sec"`
 	AdminRateLimitBurst       int           `koanf:"admin_rate_limit_burst"`
 	AdminAllowedCIDRs         []string      `koanf:"admin_allowed_cidrs"`
@@ -184,6 +199,21 @@ func (c *Config) ApplyDefaults() {
 	if c.Server.AdminReplayMaxConcurrent == 0 {
 		c.Server.AdminReplayMaxConcurrent = defaultAdminReplayConcurrent
 	}
+	if strings.TrimSpace(c.Server.AdminReplayStoreBackend) == "" {
+		c.Server.AdminReplayStoreBackend = defaultAdminReplayStore
+	}
+	if strings.TrimSpace(c.Server.AdminReplaySQLitePath) == "" {
+		c.Server.AdminReplaySQLitePath = defaultAdminReplaySQLitePath
+	}
+	if c.Server.AdminReplayReasonMinLen == 0 {
+		c.Server.AdminReplayReasonMinLen = defaultAdminReplayReasonMin
+	}
+	if c.Server.AdminReplayMaxQueuedPerIP == 0 {
+		c.Server.AdminReplayMaxQueuedPerIP = defaultAdminReplayQueuedIP
+	}
+	if c.Server.AdminReplayMaxQueuedToken == 0 {
+		c.Server.AdminReplayMaxQueuedToken = defaultAdminReplayQueuedTok
+	}
 	if c.Server.AdminRateLimitPerSec == 0 {
 		c.Server.AdminRateLimitPerSec = defaultAdminRateLimitPerSec
 	}
@@ -224,6 +254,24 @@ func (c Config) Validate() error {
 	}
 	if c.Server.AdminReplayMaxConcurrent <= 0 || c.Server.AdminReplayMaxConcurrent > maxAdminReplayConcurrent {
 		return fmt.Errorf("server.admin_replay_max_concurrent_jobs must be in range 1..%d", maxAdminReplayConcurrent)
+	}
+	replayStoreBackend := strings.ToLower(strings.TrimSpace(c.Server.AdminReplayStoreBackend))
+	switch replayStoreBackend {
+	case "memory", "sqlite":
+	default:
+		return fmt.Errorf("server.admin_replay_store_backend must be one of memory|sqlite")
+	}
+	if replayStoreBackend == "sqlite" && strings.TrimSpace(c.Server.AdminReplaySQLitePath) == "" {
+		return fmt.Errorf("server.admin_replay_sqlite_path must not be empty when server.admin_replay_store_backend=sqlite")
+	}
+	if c.Server.AdminReplayReasonMinLen <= 0 {
+		return fmt.Errorf("server.admin_replay_reason_min_length must be greater than 0")
+	}
+	if c.Server.AdminReplayMaxQueuedPerIP < 0 || c.Server.AdminReplayMaxQueuedPerIP > maxAdminReplayQueuedLimit {
+		return fmt.Errorf("server.admin_replay_max_queued_per_ip must be in range 0..%d", maxAdminReplayQueuedLimit)
+	}
+	if c.Server.AdminReplayMaxQueuedToken < 0 || c.Server.AdminReplayMaxQueuedToken > maxAdminReplayQueuedLimit {
+		return fmt.Errorf("server.admin_replay_max_queued_per_token must be in range 0..%d", maxAdminReplayQueuedLimit)
 	}
 	if c.Server.AdminRateLimitPerSec <= 0 {
 		return fmt.Errorf("server.admin_rate_limit_per_sec must be greater than 0")

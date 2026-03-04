@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,6 +183,24 @@ func TestAuthorizeAdminToken(t *testing.T) {
 	}
 }
 
+func TestAuthorizeAdminTokenForScope(t *testing.T) {
+	if ok, slot := authorizeAdminTokenForScope("primary-token", adminScopeReplay, "primary-token", "next-token", "read-token", "replay-token", "cancel-token"); !ok || slot != "primary" {
+		t.Fatalf("expected global primary token to authorize replay scope, got ok=%v slot=%q", ok, slot)
+	}
+	if ok, slot := authorizeAdminTokenForScope("read-token", adminScopeRead, "", "", "read-token", "replay-token", "cancel-token"); !ok || slot != "read" {
+		t.Fatalf("expected read token to authorize read scope, got ok=%v slot=%q", ok, slot)
+	}
+	if ok, _ := authorizeAdminTokenForScope("read-token", adminScopeReplay, "", "", "read-token", "replay-token", "cancel-token"); ok {
+		t.Fatalf("expected read token to be denied for replay scope")
+	}
+	if ok, slot := authorizeAdminTokenForScope("cancel-token", adminScopeRead, "", "", "read-token", "replay-token", "cancel-token"); !ok || slot != "cancel" {
+		t.Fatalf("expected cancel token to authorize read scope, got ok=%v slot=%q", ok, slot)
+	}
+	if ok, _ := authorizeAdminTokenForScope("replay-token", adminScopeCancel, "", "", "read-token", "replay-token", "cancel-token"); ok {
+		t.Fatalf("expected replay token to be denied for cancel scope")
+	}
+}
+
 func TestParseReplayDLQLimit(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -338,6 +357,21 @@ func TestParseReplayJobCursor(t *testing.T) {
 	missingJobID := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%d|", now.UnixNano())))
 	if _, _, err := parseReplayJobCursor(missingJobID); err == nil {
 		t.Fatalf("expected missing cursor job id to fail")
+	}
+}
+
+func TestParseAdminReason(t *testing.T) {
+	if reason, err := parseAdminReason("  investigate dlq drift  ", true, 10); err != nil || reason != "investigate dlq drift" {
+		t.Fatalf("expected valid admin reason, got reason=%q err=%v", reason, err)
+	}
+	if _, err := parseAdminReason("", true, 5); err == nil {
+		t.Fatalf("expected required admin reason to fail when missing")
+	}
+	if reason, err := parseAdminReason("", false, 5); err != nil || reason != "" {
+		t.Fatalf("expected optional missing admin reason to pass, got reason=%q err=%v", reason, err)
+	}
+	if _, err := parseAdminReason("short", true, 10); err == nil {
+		t.Fatalf("expected short admin reason to fail min length")
 	}
 }
 
@@ -581,7 +615,7 @@ func TestAdminReplayJobRegistryCancelQueued(t *testing.T) {
 		MaxLimit:       2000,
 	}
 	queued, _, _ := registry.GetOrCreate(base, "idem-cancel-queued")
-	cancelledJob, found, cancelled := registry.CancelQueued(queued.JobID)
+	cancelledJob, found, cancelled := registry.CancelQueued(queued.JobID, "manual abort")
 	if !found || !cancelled {
 		t.Fatalf("expected queued replay job cancellation to succeed, found=%v cancelled=%v", found, cancelled)
 	}
@@ -596,7 +630,7 @@ func TestAdminReplayJobRegistryCancelQueued(t *testing.T) {
 	if !registry.MarkRunning(running.JobID) {
 		t.Fatalf("expected running replay job transition")
 	}
-	runningJob, found, cancelled := registry.CancelQueued(running.JobID)
+	runningJob, found, cancelled := registry.CancelQueued(running.JobID, "manual abort")
 	if !found || cancelled {
 		t.Fatalf("expected running replay job cancel attempt to conflict, found=%v cancelled=%v", found, cancelled)
 	}
@@ -604,9 +638,183 @@ func TestAdminReplayJobRegistryCancelQueued(t *testing.T) {
 		t.Fatalf("expected running replay job status to remain running, got %+v", runningJob)
 	}
 
-	_, found, cancelled = registry.CancelQueued("missing-job-id")
+	_, found, cancelled = registry.CancelQueued("missing-job-id", "manual abort")
 	if found || cancelled {
 		t.Fatalf("expected missing replay job cancellation to report not found")
+	}
+}
+
+func TestAdminReplayJobRegistryGetOrCreateWithGuards(t *testing.T) {
+	base := adminReplayJobSnapshot{
+		RequestedLimit: 5,
+		EffectiveLimit: 5,
+		MaxLimit:       2000,
+	}
+
+	registryIP := newAdminReplayJobRegistry(128, time.Hour)
+	_, reused, conflict, queueConflict, queueScope, queueCount := registryIP.GetOrCreateWithGuards(
+		base,
+		adminReplayJobCreateMeta{CreatorIP: "203.0.113.10", CreatorTokenFingerprint: "tok-a"},
+		"",
+		1,
+		0,
+	)
+	if reused || conflict || queueConflict {
+		t.Fatalf("expected first guarded create to succeed, reused=%v conflict=%v queueConflict=%v", reused, conflict, queueConflict)
+	}
+	_, _, _, queueConflict, queueScope, queueCount = registryIP.GetOrCreateWithGuards(
+		base,
+		adminReplayJobCreateMeta{CreatorIP: "203.0.113.10", CreatorTokenFingerprint: "tok-b"},
+		"",
+		1,
+		0,
+	)
+	if !queueConflict || queueScope != "ip" || queueCount != 1 {
+		t.Fatalf("expected ip queue guard conflict scope=ip count=1, got conflict=%v scope=%q count=%d", queueConflict, queueScope, queueCount)
+	}
+
+	registryToken := newAdminReplayJobRegistry(128, time.Hour)
+	_, reused, conflict, queueConflict, queueScope, queueCount = registryToken.GetOrCreateWithGuards(
+		base,
+		adminReplayJobCreateMeta{CreatorIP: "198.51.100.20", CreatorTokenFingerprint: "tok-z"},
+		"",
+		0,
+		1,
+	)
+	if reused || conflict || queueConflict {
+		t.Fatalf("expected first guarded create for token scope to succeed, reused=%v conflict=%v queueConflict=%v", reused, conflict, queueConflict)
+	}
+	_, _, _, queueConflict, queueScope, queueCount = registryToken.GetOrCreateWithGuards(
+		base,
+		adminReplayJobCreateMeta{CreatorIP: "198.51.100.21", CreatorTokenFingerprint: "tok-z"},
+		"",
+		0,
+		1,
+	)
+	if !queueConflict || queueScope != "token" || queueCount != 1 {
+		t.Fatalf("expected token queue guard conflict scope=token count=1, got conflict=%v scope=%q count=%d", queueConflict, queueScope, queueCount)
+	}
+}
+
+func TestAdminReplayJobRegistrySQLitePersistsAcrossRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "admin-replay.db")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	registry, err := newAdminReplayJobRegistryWithBackend(128, time.Hour, "sqlite", dbPath, logger)
+	if err != nil {
+		t.Fatalf("create sqlite replay registry: %v", err)
+	}
+
+	base := adminReplayJobSnapshot{
+		RequestedLimit: 3,
+		EffectiveLimit: 3,
+		MaxLimit:       2000,
+	}
+	queued, reused, conflict, queueConflict, _, _ := registry.GetOrCreateWithGuards(
+		base,
+		adminReplayJobCreateMeta{
+			OperatorReason:          "replay after incident review",
+			CreatorIP:               "203.0.113.15",
+			CreatorTokenFingerprint: "token-fp-a",
+		},
+		"sqlite-idem-1",
+		0,
+		0,
+	)
+	if reused || conflict || queueConflict {
+		t.Fatalf("expected initial sqlite replay job creation, reused=%v conflict=%v queueConflict=%v", reused, conflict, queueConflict)
+	}
+	if !registry.MarkRunning(queued.JobID) {
+		t.Fatalf("expected queued job to transition to running")
+	}
+	registry.MarkSucceeded(queued.JobID, 3)
+
+	cancelBase := adminReplayJobSnapshot{
+		RequestedLimit: 2,
+		EffectiveLimit: 2,
+		MaxLimit:       2000,
+		DryRun:         true,
+	}
+	cancelQueued, reused, conflict, queueConflict, _, _ := registry.GetOrCreateWithGuards(
+		cancelBase,
+		adminReplayJobCreateMeta{
+			OperatorReason:          "queue sanity check",
+			CreatorIP:               "203.0.113.16",
+			CreatorTokenFingerprint: "token-fp-b",
+		},
+		"sqlite-idem-2",
+		0,
+		0,
+	)
+	if reused || conflict || queueConflict {
+		t.Fatalf("expected second sqlite replay job creation, reused=%v conflict=%v queueConflict=%v", reused, conflict, queueConflict)
+	}
+	cancelledSnapshot, found, cancelled := registry.CancelQueued(cancelQueued.JobID, "operator aborted queue")
+	if !found || !cancelled {
+		t.Fatalf("expected queued replay job cancellation to persist, found=%v cancelled=%v", found, cancelled)
+	}
+	if cancelledSnapshot.CancelReason != "operator aborted queue" {
+		t.Fatalf("expected cancel reason to be set, got %q", cancelledSnapshot.CancelReason)
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatalf("close sqlite replay registry: %v", err)
+	}
+
+	restored, err := newAdminReplayJobRegistryWithBackend(128, time.Hour, "sqlite", dbPath, logger)
+	if err != nil {
+		t.Fatalf("restore sqlite replay registry: %v", err)
+	}
+	defer func() {
+		if err := restored.Close(); err != nil {
+			t.Fatalf("close restored sqlite replay registry: %v", err)
+		}
+	}()
+
+	loaded, found := restored.Get(queued.JobID)
+	if !found {
+		t.Fatalf("expected succeeded replay job to be restored")
+	}
+	if loaded.Status != adminReplayJobStatusSucceeded || loaded.Replayed != 3 {
+		t.Fatalf("unexpected restored succeeded replay job snapshot: %+v", loaded)
+	}
+	if loaded.OperatorReason != "replay after incident review" {
+		t.Fatalf("expected restored operator reason, got %q", loaded.OperatorReason)
+	}
+	idemLoaded, found := restored.GetByIdempotencyKey("sqlite-idem-1")
+	if !found || idemLoaded.JobID != queued.JobID {
+		t.Fatalf("expected idempotency lookup to be restored")
+	}
+
+	cancelledLoaded, found := restored.Get(cancelQueued.JobID)
+	if !found {
+		t.Fatalf("expected cancelled replay job to be restored")
+	}
+	if cancelledLoaded.Status != adminReplayJobStatusCancelled {
+		t.Fatalf("expected restored cancelled status, got %q", cancelledLoaded.Status)
+	}
+	if cancelledLoaded.CancelReason != "operator aborted queue" {
+		t.Fatalf("expected restored cancel reason, got %q", cancelledLoaded.CancelReason)
+	}
+	if !strings.Contains(cancelledLoaded.Error, "cancelled") {
+		t.Fatalf("expected restored cancelled error message, got %q", cancelledLoaded.Error)
+	}
+
+	next, reused, conflict, queueConflict, _, _ := restored.GetOrCreateWithGuards(
+		base,
+		adminReplayJobCreateMeta{
+			OperatorReason:          "follow-up replay",
+			CreatorIP:               "203.0.113.17",
+			CreatorTokenFingerprint: "token-fp-c",
+		},
+		"sqlite-idem-3",
+		0,
+		0,
+	)
+	if reused || conflict || queueConflict {
+		t.Fatalf("expected new replay job creation after restore, reused=%v conflict=%v queueConflict=%v", reused, conflict, queueConflict)
+	}
+	if next.JobID == queued.JobID || next.JobID == cancelQueued.JobID {
+		t.Fatalf("expected new replay job id after restore, got %q", next.JobID)
 	}
 }
 
@@ -1762,6 +1970,196 @@ func TestRunAdminReplayEndpointAllowlistAndMTLS(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, respAllowed.Body)
 	_ = respAllowed.Body.Close()
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run returned error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("run did not stop after cancel")
+	}
+}
+
+func TestRunAdminEndpointsRoleScopedTokens(t *testing.T) {
+	s := runNATSServer(t)
+	port := freePort(t)
+
+	cfg := config.Config{
+		NATS: config.NATSConfig{
+			URL:           s.ClientURL(),
+			Stream:        "ENSEMBLE_TAP_CMD_TEST_ADMIN_ROLE_SCOPES",
+			SubjectPrefix: "ensemble.tap",
+			MaxAge:        time.Hour,
+			DedupWindow:   time.Minute,
+		},
+		Server: config.ServerConfig{
+			Port:                     port,
+			BasePath:                 "/webhooks",
+			MaxBodySize:              1 << 20,
+			AdminTokenRead:           "read-admin-token",
+			AdminTokenReplay:         "replay-admin-token",
+			AdminTokenCancel:         "cancel-admin-token",
+			AdminReplayRequireReason: true,
+			AdminReplayReasonMinLen:  8,
+			AdminRateLimitPerSec:     100,
+			AdminRateLimitBurst:      100,
+		},
+	}
+	cfg.ApplyDefaults()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+
+	readyURL := "http://127.0.0.1:" + intToString(port) + "/readyz"
+	if err := waitForStatusOrError(readyURL, http.StatusOK, 10*time.Second, errCh); err != nil {
+		t.Fatalf("ready endpoint never became healthy: %v", err)
+	}
+
+	replayURL := "http://127.0.0.1:" + intToString(port) + "/admin/replay-dlq?dry_run=true&limit=1"
+
+	reqReplayReadToken, _ := http.NewRequest(http.MethodPost, replayURL, nil)
+	reqReplayReadToken.Header.Set("X-Admin-Token", "read-admin-token")
+	reqReplayReadToken.Header.Set("X-Request-ID", "role-replay-read-1")
+	reqReplayReadToken.Header.Set("X-Admin-Reason", "validate replay scope")
+	respReplayReadToken, err := http.DefaultClient.Do(reqReplayReadToken)
+	if err != nil {
+		t.Fatalf("request replay with read token: %v", err)
+	}
+	if respReplayReadToken.StatusCode != http.StatusUnauthorized {
+		_ = respReplayReadToken.Body.Close()
+		t.Fatalf("expected replay with read token to be unauthorized, got %d", respReplayReadToken.StatusCode)
+	}
+	_ = respReplayReadToken.Body.Close()
+
+	reqReplayMissingReason, _ := http.NewRequest(http.MethodPost, replayURL, nil)
+	reqReplayMissingReason.Header.Set("X-Admin-Token", "replay-admin-token")
+	reqReplayMissingReason.Header.Set("X-Request-ID", "role-replay-reason-1")
+	respReplayMissingReason, err := http.DefaultClient.Do(reqReplayMissingReason)
+	if err != nil {
+		t.Fatalf("request replay missing reason: %v", err)
+	}
+	if respReplayMissingReason.StatusCode != http.StatusBadRequest {
+		_ = respReplayMissingReason.Body.Close()
+		t.Fatalf("expected replay missing reason to be 400, got %d", respReplayMissingReason.StatusCode)
+	}
+	_ = respReplayMissingReason.Body.Close()
+
+	reqReplayOK, _ := http.NewRequest(http.MethodPost, replayURL, nil)
+	reqReplayOK.Header.Set("X-Admin-Token", "replay-admin-token")
+	reqReplayOK.Header.Set("X-Request-ID", "role-replay-ok-1")
+	reqReplayOK.Header.Set("X-Admin-Reason", "manually verify role-scoped replay")
+	respReplayOK, err := http.DefaultClient.Do(reqReplayOK)
+	if err != nil {
+		t.Fatalf("request replay with replay token: %v", err)
+	}
+	if respReplayOK.StatusCode != http.StatusAccepted {
+		_ = respReplayOK.Body.Close()
+		t.Fatalf("expected replay with replay token to be accepted, got %d", respReplayOK.StatusCode)
+	}
+	var replayAccepted struct {
+		Job struct {
+			JobID string `json:"job_id"`
+		} `json:"job"`
+	}
+	replayAcceptedBody, err := io.ReadAll(respReplayOK.Body)
+	_ = respReplayOK.Body.Close()
+	if err != nil {
+		t.Fatalf("read replay accepted body: %v", err)
+	}
+	if err := json.Unmarshal(replayAcceptedBody, &replayAccepted); err != nil {
+		t.Fatalf("decode replay accepted body: %v body=%s", err, string(replayAcceptedBody))
+	}
+	if replayAccepted.Job.JobID == "" {
+		t.Fatalf("expected replay job id in accepted payload")
+	}
+
+	statusURL := "http://127.0.0.1:" + intToString(port) + "/admin/replay-dlq/" + replayAccepted.Job.JobID
+	reqStatusRead, _ := http.NewRequest(http.MethodGet, statusURL, nil)
+	reqStatusRead.Header.Set("X-Admin-Token", "read-admin-token")
+	reqStatusRead.Header.Set("X-Request-ID", "role-status-read-1")
+	respStatusRead, err := http.DefaultClient.Do(reqStatusRead)
+	if err != nil {
+		t.Fatalf("request replay status with read token: %v", err)
+	}
+	if respStatusRead.StatusCode != http.StatusOK {
+		_ = respStatusRead.Body.Close()
+		t.Fatalf("expected replay status with read token 200, got %d", respStatusRead.StatusCode)
+	}
+	_ = respStatusRead.Body.Close()
+
+	reqCancelMissingReason, _ := http.NewRequest(http.MethodDelete, "http://127.0.0.1:"+intToString(port)+"/admin/replay-dlq/missing-role-job", nil)
+	reqCancelMissingReason.Header.Set("X-Admin-Token", "cancel-admin-token")
+	reqCancelMissingReason.Header.Set("X-Request-ID", "role-cancel-reason-1")
+	respCancelMissingReason, err := http.DefaultClient.Do(reqCancelMissingReason)
+	if err != nil {
+		t.Fatalf("request cancel missing reason: %v", err)
+	}
+	if respCancelMissingReason.StatusCode != http.StatusBadRequest {
+		_ = respCancelMissingReason.Body.Close()
+		t.Fatalf("expected cancel missing reason to be 400, got %d", respCancelMissingReason.StatusCode)
+	}
+	_ = respCancelMissingReason.Body.Close()
+
+	reqCancelMissing, _ := http.NewRequest(http.MethodDelete, "http://127.0.0.1:"+intToString(port)+"/admin/replay-dlq/missing-role-job", nil)
+	reqCancelMissing.Header.Set("X-Admin-Token", "cancel-admin-token")
+	reqCancelMissing.Header.Set("X-Request-ID", "role-cancel-missing-1")
+	reqCancelMissing.Header.Set("X-Admin-Reason", "cleanup unknown replay id")
+	respCancelMissing, err := http.DefaultClient.Do(reqCancelMissing)
+	if err != nil {
+		t.Fatalf("request cancel with cancel token: %v", err)
+	}
+	if respCancelMissing.StatusCode != http.StatusNotFound {
+		_ = respCancelMissing.Body.Close()
+		t.Fatalf("expected cancel missing job to be 404, got %d", respCancelMissing.StatusCode)
+	}
+	_ = respCancelMissing.Body.Close()
+
+	reqCancelReplayToken, _ := http.NewRequest(http.MethodDelete, "http://127.0.0.1:"+intToString(port)+"/admin/replay-dlq/missing-role-job", nil)
+	reqCancelReplayToken.Header.Set("X-Admin-Token", "replay-admin-token")
+	reqCancelReplayToken.Header.Set("X-Request-ID", "role-cancel-replay-token-1")
+	reqCancelReplayToken.Header.Set("X-Admin-Reason", "should fail")
+	respCancelReplayToken, err := http.DefaultClient.Do(reqCancelReplayToken)
+	if err != nil {
+		t.Fatalf("request cancel with replay token: %v", err)
+	}
+	if respCancelReplayToken.StatusCode != http.StatusUnauthorized {
+		_ = respCancelReplayToken.Body.Close()
+		t.Fatalf("expected cancel with replay token to be unauthorized, got %d", respCancelReplayToken.StatusCode)
+	}
+	_ = respCancelReplayToken.Body.Close()
+
+	reqListRead, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+intToString(port)+"/admin/replay-dlq?status=succeeded&limit=5", nil)
+	reqListRead.Header.Set("X-Admin-Token", "read-admin-token")
+	reqListRead.Header.Set("X-Request-ID", "role-list-read-1")
+	respListRead, err := http.DefaultClient.Do(reqListRead)
+	if err != nil {
+		t.Fatalf("request replay list with read token: %v", err)
+	}
+	if respListRead.StatusCode != http.StatusOK {
+		_ = respListRead.Body.Close()
+		t.Fatalf("expected replay list with read token 200, got %d", respListRead.StatusCode)
+	}
+	_ = respListRead.Body.Close()
+
+	reqPollerRead, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+intToString(port)+"/admin/poller-status", nil)
+	reqPollerRead.Header.Set("X-Admin-Token", "read-admin-token")
+	reqPollerRead.Header.Set("X-Request-ID", "role-poller-read-1")
+	respPollerRead, err := http.DefaultClient.Do(reqPollerRead)
+	if err != nil {
+		t.Fatalf("request poller status with read token: %v", err)
+	}
+	if respPollerRead.StatusCode != http.StatusOK {
+		_ = respPollerRead.Body.Close()
+		t.Fatalf("expected poller status with read token 200, got %d", respPollerRead.StatusCode)
+	}
+	_ = respPollerRead.Body.Close()
 
 	cancel()
 	select {

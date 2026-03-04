@@ -80,6 +80,21 @@ func TestLoadConfigMissingFileAppliesDefaults(t *testing.T) {
 	if cfg.Server.AdminReplayMaxConcurrent != 2 {
 		t.Fatalf("expected default admin replay max concurrent jobs 2, got %d", cfg.Server.AdminReplayMaxConcurrent)
 	}
+	if cfg.Server.AdminReplayStoreBackend != "memory" {
+		t.Fatalf("expected default admin replay store backend memory, got %q", cfg.Server.AdminReplayStoreBackend)
+	}
+	if cfg.Server.AdminReplaySQLitePath != "tap-admin-replay.db" {
+		t.Fatalf("expected default admin replay sqlite path, got %q", cfg.Server.AdminReplaySQLitePath)
+	}
+	if cfg.Server.AdminReplayReasonMinLen != 12 {
+		t.Fatalf("expected default admin replay reason min length 12, got %d", cfg.Server.AdminReplayReasonMinLen)
+	}
+	if cfg.Server.AdminReplayMaxQueuedPerIP != 100 {
+		t.Fatalf("expected default admin replay max queued per ip 100, got %d", cfg.Server.AdminReplayMaxQueuedPerIP)
+	}
+	if cfg.Server.AdminReplayMaxQueuedToken != 20 {
+		t.Fatalf("expected default admin replay max queued per token 20, got %d", cfg.Server.AdminReplayMaxQueuedToken)
+	}
 	if cfg.Server.AdminRateLimitPerSec != 5.0 {
 		t.Fatalf("expected default admin rate limit per sec 5.0, got %v", cfg.Server.AdminRateLimitPerSec)
 	}
@@ -101,10 +116,19 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	t.Setenv("TAP_SERVER_ADMIN_REPLAY_JOB_MAX_JOBS", "777")
 	t.Setenv("TAP_SERVER_ADMIN_REPLAY_JOB_TIMEOUT", "2m")
 	t.Setenv("TAP_SERVER_ADMIN_REPLAY_MAX_CONCURRENT_JOBS", "6")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_STORE_BACKEND", "sqlite")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_SQLITE_PATH", "/tmp/tap-admin-replay-test.db")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_REQUIRE_REASON", "true")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_REASON_MIN_LENGTH", "9")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_MAX_QUEUED_PER_IP", "55")
+	t.Setenv("TAP_SERVER_ADMIN_REPLAY_MAX_QUEUED_PER_TOKEN", "12")
 	t.Setenv("TAP_SERVER_ADMIN_RATE_LIMIT_PER_SEC", "2.5")
 	t.Setenv("TAP_SERVER_ADMIN_RATE_LIMIT_BURST", "9")
 	t.Setenv("TAP_SERVER_ADMIN_TOKEN", "current-admin-token")
 	t.Setenv("TAP_SERVER_ADMIN_TOKEN_SECONDARY", "next-admin-token")
+	t.Setenv("TAP_SERVER_ADMIN_TOKEN_READ", "read-admin-token")
+	t.Setenv("TAP_SERVER_ADMIN_TOKEN_REPLAY", "replay-admin-token")
+	t.Setenv("TAP_SERVER_ADMIN_TOKEN_CANCEL", "cancel-admin-token")
 	t.Setenv("TAP_CLICKHOUSE_FLUSH_INTERVAL", "3s")
 	t.Setenv("TAP_PROVIDERS_STRIPE_SECRET", "whsec_env")
 	t.Setenv("TAP_PROVIDERS_HUBSPOT_CLIENT_SECRET", "hs_client_secret")
@@ -135,6 +159,24 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	if cfg.Server.AdminReplayMaxConcurrent != 6 {
 		t.Fatalf("expected server.admin_replay_max_concurrent_jobs override, got %d", cfg.Server.AdminReplayMaxConcurrent)
 	}
+	if cfg.Server.AdminReplayStoreBackend != "sqlite" {
+		t.Fatalf("expected server.admin_replay_store_backend override, got %q", cfg.Server.AdminReplayStoreBackend)
+	}
+	if cfg.Server.AdminReplaySQLitePath != "/tmp/tap-admin-replay-test.db" {
+		t.Fatalf("expected server.admin_replay_sqlite_path override, got %q", cfg.Server.AdminReplaySQLitePath)
+	}
+	if !cfg.Server.AdminReplayRequireReason {
+		t.Fatalf("expected server.admin_replay_require_reason override")
+	}
+	if cfg.Server.AdminReplayReasonMinLen != 9 {
+		t.Fatalf("expected server.admin_replay_reason_min_length override, got %d", cfg.Server.AdminReplayReasonMinLen)
+	}
+	if cfg.Server.AdminReplayMaxQueuedPerIP != 55 {
+		t.Fatalf("expected server.admin_replay_max_queued_per_ip override, got %d", cfg.Server.AdminReplayMaxQueuedPerIP)
+	}
+	if cfg.Server.AdminReplayMaxQueuedToken != 12 {
+		t.Fatalf("expected server.admin_replay_max_queued_per_token override, got %d", cfg.Server.AdminReplayMaxQueuedToken)
+	}
 	if cfg.Server.AdminRateLimitPerSec != 2.5 {
 		t.Fatalf("expected server.admin_rate_limit_per_sec override, got %v", cfg.Server.AdminRateLimitPerSec)
 	}
@@ -146,6 +188,15 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	}
 	if cfg.Server.AdminTokenSecondary != "next-admin-token" {
 		t.Fatalf("expected server.admin_token_secondary override")
+	}
+	if cfg.Server.AdminTokenRead != "read-admin-token" {
+		t.Fatalf("expected server.admin_token_read override")
+	}
+	if cfg.Server.AdminTokenReplay != "replay-admin-token" {
+		t.Fatalf("expected server.admin_token_replay override")
+	}
+	if cfg.Server.AdminTokenCancel != "cancel-admin-token" {
+		t.Fatalf("expected server.admin_token_cancel override")
 	}
 	if cfg.ClickHouse.FlushInterval != 3*time.Second {
 		t.Fatalf("expected clickhouse.flush_interval override, got %s", cfg.ClickHouse.FlushInterval)
@@ -238,6 +289,50 @@ func TestConfigValidateAdminTokenAndReplayRules(t *testing.T) {
 			wantErrSub: "admin_replay_max_concurrent_jobs",
 		},
 		{
+			name: "replay store backend must be valid",
+			cfg: Config{
+				Server: ServerConfig{
+					AdminReplayStoreBackend: "file",
+				},
+			},
+			wantErrSub: "admin_replay_store_backend",
+		},
+		{
+			name: "sqlite replay backend accepts default sqlite path",
+			cfg: Config{
+				Server: ServerConfig{
+					AdminReplayStoreBackend: "sqlite",
+				},
+			},
+		},
+		{
+			name: "replay reason min length must be positive",
+			cfg: Config{
+				Server: ServerConfig{
+					AdminReplayReasonMinLen: -1,
+				},
+			},
+			wantErrSub: "admin_replay_reason_min_length",
+		},
+		{
+			name: "replay queued per ip must be in range",
+			cfg: Config{
+				Server: ServerConfig{
+					AdminReplayMaxQueuedPerIP: -1,
+				},
+			},
+			wantErrSub: "admin_replay_max_queued_per_ip",
+		},
+		{
+			name: "replay queued per token must be in range",
+			cfg: Config{
+				Server: ServerConfig{
+					AdminReplayMaxQueuedToken: -1,
+				},
+			},
+			wantErrSub: "admin_replay_max_queued_per_token",
+		},
+		{
 			name: "admin rate limit per sec must be positive",
 			cfg: Config{
 				Server: ServerConfig{
@@ -268,16 +363,22 @@ func TestConfigValidateAdminTokenAndReplayRules(t *testing.T) {
 			name: "valid token rotation and replay max",
 			cfg: Config{
 				Server: ServerConfig{
-					AdminToken:               "primary-token",
-					AdminTokenSecondary:      "next-token",
-					AdminReplayMaxLimit:      5000,
-					AdminReplayJobTTL:        12 * time.Hour,
-					AdminReplayJobMaxJobs:    2048,
-					AdminReplayJobTimeout:    2 * time.Minute,
-					AdminReplayMaxConcurrent: 4,
-					AdminRateLimitPerSec:     3.5,
-					AdminRateLimitBurst:      11,
-					AdminAllowedCIDRs:        []string{"203.0.113.0/24"},
+					AdminToken:                "primary-token",
+					AdminTokenSecondary:       "next-token",
+					AdminReplayMaxLimit:       5000,
+					AdminReplayJobTTL:         12 * time.Hour,
+					AdminReplayJobMaxJobs:     2048,
+					AdminReplayJobTimeout:     2 * time.Minute,
+					AdminReplayMaxConcurrent:  4,
+					AdminReplayStoreBackend:   "sqlite",
+					AdminReplaySQLitePath:     "/tmp/tap-admin-replay.db",
+					AdminReplayRequireReason:  true,
+					AdminReplayReasonMinLen:   16,
+					AdminReplayMaxQueuedPerIP: 80,
+					AdminReplayMaxQueuedToken: 10,
+					AdminRateLimitPerSec:      3.5,
+					AdminRateLimitBurst:       11,
+					AdminAllowedCIDRs:         []string{"203.0.113.0/24"},
 				},
 			},
 		},

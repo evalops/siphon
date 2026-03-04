@@ -105,6 +105,12 @@ paths:
           schema:
             type: string
           description: Reuses an existing replay job for equivalent replay parameters when the same key is provided.
+        - in: header
+          name: X-Admin-Reason
+          required: false
+          schema:
+            type: string
+          description: Optional operator reason. Runtime can require this header with `server.admin_replay_require_reason` and enforce `server.admin_replay_reason_min_length`.
       responses:
         "200":
           description: Existing replay job returned due to idempotency-key reuse.
@@ -119,7 +125,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ReplayJobEnvelope"
         "409":
-          description: Idempotency-Key was reused with different replay parameters.
+          description: Idempotency-Key was reused with different replay parameters, or replay queue guardrails were exceeded.
           content:
             application/json:
               schema:
@@ -176,6 +182,12 @@ paths:
           required: false
           schema:
             type: string
+        - in: header
+          name: X-Admin-Reason
+          required: false
+          schema:
+            type: string
+          description: Optional operator reason. Runtime can require this header with `server.admin_replay_require_reason` and enforce `server.admin_replay_reason_min_length`.
       responses:
         "200":
           description: Replay job cancelled.
@@ -183,6 +195,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReplayJobEnvelope"
+        "400":
+          description: Invalid input (for example, missing job_id path value or missing/too-short X-Admin-Reason when required).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminError"
         "401":
           description: Missing or invalid admin token.
           content:
@@ -418,6 +436,10 @@ components:
         replayed:
           type: integer
           minimum: 0
+        operator_reason:
+          type: string
+        cancel_reason:
+          type: string
         error:
           type: string
     PollerStatusResponse:

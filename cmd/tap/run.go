@@ -43,6 +43,10 @@ const (
 	defaultReplayListLimit = 50
 	maxReplayListLimit     = 500
 
+	adminScopeRead   = "read"
+	adminScopeReplay = "replay"
+	adminScopeCancel = "cancel"
+
 	adminEndpointReplayDLQ     = "replay_dlq"
 	adminEndpointReplayDLQList = "replay_dlq_list"
 	adminEndpointReplayStatus  = "replay_dlq_status"
@@ -120,9 +124,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return nil
 	}))
 	mux.Handle("GET /metrics", promhttp.Handler())
-	if strings.TrimSpace(cfg.Server.AdminToken) != "" {
+	if adminEndpointsEnabled(cfg.Server) {
 		adminToken := strings.TrimSpace(cfg.Server.AdminToken)
 		adminTokenSecondary := strings.TrimSpace(cfg.Server.AdminTokenSecondary)
+		adminTokenRead := strings.TrimSpace(cfg.Server.AdminTokenRead)
+		adminTokenReplay := strings.TrimSpace(cfg.Server.AdminTokenReplay)
+		adminTokenCancel := strings.TrimSpace(cfg.Server.AdminTokenCancel)
 		adminReplayMaxLimit := cfg.Server.AdminReplayMaxLimit
 		if adminReplayMaxLimit <= 0 {
 			adminReplayMaxLimit = maxReplayDLQLimit
@@ -149,9 +156,28 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if adminReplayMaxConcurrent <= 0 {
 			adminReplayMaxConcurrent = 1
 		}
+		adminReplayRequireReason := cfg.Server.AdminReplayRequireReason
+		adminReplayReasonMinLen := cfg.Server.AdminReplayReasonMinLen
+		if adminReplayReasonMinLen <= 0 {
+			adminReplayReasonMinLen = 1
+		}
+		adminReplayMaxQueuedPerIP := cfg.Server.AdminReplayMaxQueuedPerIP
+		adminReplayMaxQueuedPerToken := cfg.Server.AdminReplayMaxQueuedToken
+		adminReplayStoreBackend := strings.ToLower(strings.TrimSpace(cfg.Server.AdminReplayStoreBackend))
+		adminReplaySQLitePath := strings.TrimSpace(cfg.Server.AdminReplaySQLitePath)
 		retryAfterSeconds := adminRetryAfterSeconds(adminRateLimitPerSec)
 		adminLimiters := newAdminRateLimiterRegistry(rate.Limit(adminRateLimitPerSec), adminRateLimitBurst)
-		replayJobs := newAdminReplayJobRegistry(cfg.Server.AdminReplayJobMaxJobs, cfg.Server.AdminReplayJobTTL)
+		replayJobs, err := newAdminReplayJobRegistryWithBackend(
+			cfg.Server.AdminReplayJobMaxJobs,
+			cfg.Server.AdminReplayJobTTL,
+			adminReplayStoreBackend,
+			adminReplaySQLitePath,
+			logger,
+		)
+		if err != nil {
+			return fmt.Errorf("initialize admin replay job registry: %w", err)
+		}
+		defer replayJobs.Close()
 		replaySlots := make(chan struct{}, adminReplayMaxConcurrent)
 		observeAdmin := func(endpoint, outcome string, startedAt time.Time) {
 			metrics.AdminRequestsTotal.WithLabelValues(endpoint, outcome).Inc()
@@ -161,12 +187,13 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			metrics.AdminReplayJobsTotal.WithLabelValues(stage).Inc()
 		}
 		type adminAccess struct {
-			RequestID string
-			TokenSlot string
-			UserAgent string
-			RequestIP string
+			RequestID        string
+			TokenSlot        string
+			TokenFingerprint string
+			UserAgent        string
+			RequestIP        string
 		}
-		requireAdminAccess := func(endpoint string, w http.ResponseWriter, r *http.Request) (adminAccess, bool) {
+		requireAdminAccess := func(endpoint, scope string, w http.ResponseWriter, r *http.Request) (adminAccess, bool) {
 			reqID := requestID(r)
 			userAgent := strings.TrimSpace(r.UserAgent())
 			requestIP := requesterIP(r)
@@ -220,7 +247,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				writeAdminError(w, http.StatusTooManyRequests, reqID, "rate limit exceeded")
 				return adminAccess{}, false
 			}
-			authorized, tokenSlot := authorizeAdminToken(tokenHeader, adminToken, adminTokenSecondary)
+			authorized, tokenSlot := authorizeAdminTokenForScope(
+				tokenHeader,
+				scope,
+				adminToken,
+				adminTokenSecondary,
+				adminTokenRead,
+				adminTokenReplay,
+				adminTokenCancel,
+			)
 			if !authorized {
 				observeAdmin(endpoint, adminOutcomeUnauthorized, startedAt)
 				logger.Warn("admin request unauthorized",
@@ -236,14 +271,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				return adminAccess{}, false
 			}
 			return adminAccess{
-				RequestID: reqID,
-				TokenSlot: tokenSlot,
-				UserAgent: userAgent,
-				RequestIP: requestIP,
+				RequestID:        reqID,
+				TokenSlot:        tokenSlot,
+				TokenFingerprint: adminTokenFingerprint(tokenHeader),
+				UserAgent:        userAgent,
+				RequestIP:        requestIP,
 			}, true
 		}
 		mux.HandleFunc("GET /admin/replay-dlq", func(w http.ResponseWriter, r *http.Request) {
-			access, ok := requireAdminAccess(adminEndpointReplayDLQList, w, r)
+			access, ok := requireAdminAccess(adminEndpointReplayDLQList, adminScopeRead, w, r)
 			if !ok {
 				return
 			}
@@ -334,7 +370,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		})
 
 		mux.HandleFunc("POST /admin/replay-dlq", func(w http.ResponseWriter, r *http.Request) {
-			access, ok := requireAdminAccess(adminEndpointReplayDLQ, w, r)
+			access, ok := requireAdminAccess(adminEndpointReplayDLQ, adminScopeReplay, w, r)
 			if !ok {
 				return
 			}
@@ -375,14 +411,39 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				writeAdminError(w, http.StatusBadRequest, access.RequestID, err.Error())
 				return
 			}
+			operatorReason, err := parseAdminReason(
+				r.Header.Get("X-Admin-Reason"),
+				adminReplayRequireReason,
+				adminReplayReasonMinLen,
+			)
+			if err != nil {
+				observeAdmin(adminEndpointReplayDLQ, adminOutcomeBadRequest, startedAt)
+				logger.Warn("admin replay dlq rejected",
+					"path", r.URL.Path,
+					"method", r.Method,
+					"endpoint", adminEndpointReplayDLQ,
+					"request_id", access.RequestID,
+					"token_slot", access.TokenSlot,
+					"requester_ip", access.RequestIP,
+					"user_agent", access.UserAgent,
+					"error", err.Error(),
+					"duration_ms", time.Since(startedAt).Milliseconds(),
+				)
+				writeAdminError(w, http.StatusBadRequest, access.RequestID, err.Error())
+				return
+			}
 			idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-			job, idempotencyReused, idempotencyConflict := replayJobs.GetOrCreate(adminReplayJobSnapshot{
+			job, idempotencyReused, idempotencyConflict, queueConflict, queueScope, queueCount := replayJobs.GetOrCreateWithGuards(adminReplayJobSnapshot{
 				RequestedLimit: requestedLimit,
 				EffectiveLimit: limit,
 				MaxLimit:       adminReplayMaxLimit,
 				Capped:         capped,
 				DryRun:         dryRun,
-			}, idempotencyKey)
+			}, adminReplayJobCreateMeta{
+				OperatorReason:          operatorReason,
+				CreatorIP:               access.RequestIP,
+				CreatorTokenFingerprint: access.TokenFingerprint,
+			}, idempotencyKey, adminReplayMaxQueuedPerIP, adminReplayMaxQueuedPerToken)
 			if idempotencyConflict {
 				observeAdmin(adminEndpointReplayDLQ, adminOutcomeConflict, startedAt)
 				observeReplayJob("conflict")
@@ -402,6 +463,24 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					"duration_ms", time.Since(startedAt).Milliseconds(),
 				)
 				writeAdminError(w, http.StatusConflict, access.RequestID, "idempotency key already used for different replay parameters")
+				return
+			}
+			if queueConflict {
+				observeAdmin(adminEndpointReplayDLQ, adminOutcomeConflict, startedAt)
+				observeReplayJob("queue_limited")
+				logger.Warn("admin replay dlq queue limit conflict",
+					"path", r.URL.Path,
+					"method", r.Method,
+					"endpoint", adminEndpointReplayDLQ,
+					"request_id", access.RequestID,
+					"token_slot", access.TokenSlot,
+					"requester_ip", access.RequestIP,
+					"user_agent", access.UserAgent,
+					"queue_scope", queueScope,
+					"queue_count", queueCount,
+					"duration_ms", time.Since(startedAt).Milliseconds(),
+				)
+				writeAdminError(w, http.StatusConflict, access.RequestID, "replay queue limit exceeded for caller scope")
 				return
 			}
 			if idempotencyReused {
@@ -490,12 +569,13 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				"requested_limit", requestedLimit,
 				"effective_limit", limit,
 				"dry_run", dryRun,
+				"operator_reason", operatorReason,
 				"capped", capped,
 				"duration_ms", time.Since(startedAt).Milliseconds(),
 			)
 		})
 		mux.HandleFunc("GET /admin/replay-dlq/{job_id}", func(w http.ResponseWriter, r *http.Request) {
-			access, ok := requireAdminAccess(adminEndpointReplayStatus, w, r)
+			access, ok := requireAdminAccess(adminEndpointReplayStatus, adminScopeRead, w, r)
 			if !ok {
 				return
 			}
@@ -543,7 +623,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			)
 		})
 		mux.HandleFunc("DELETE /admin/replay-dlq/{job_id}", func(w http.ResponseWriter, r *http.Request) {
-			access, ok := requireAdminAccess(adminEndpointReplayCancel, w, r)
+			access, ok := requireAdminAccess(adminEndpointReplayCancel, adminScopeCancel, w, r)
 			if !ok {
 				return
 			}
@@ -554,7 +634,17 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				writeAdminError(w, http.StatusBadRequest, access.RequestID, "job_id is required")
 				return
 			}
-			job, found, cancelled := replayJobs.CancelQueued(jobID)
+			cancelReason, err := parseAdminReason(
+				r.Header.Get("X-Admin-Reason"),
+				adminReplayRequireReason,
+				adminReplayReasonMinLen,
+			)
+			if err != nil {
+				observeAdmin(adminEndpointReplayCancel, adminOutcomeBadRequest, startedAt)
+				writeAdminError(w, http.StatusBadRequest, access.RequestID, err.Error())
+				return
+			}
+			job, found, cancelled := replayJobs.CancelQueued(jobID, cancelReason)
 			if !found {
 				observeAdmin(adminEndpointReplayCancel, adminOutcomeNotFound, startedAt)
 				logger.Warn("admin replay dlq cancel missing",
@@ -566,6 +656,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 					"requester_ip", access.RequestIP,
 					"user_agent", access.UserAgent,
 					"job_id", jobID,
+					"cancel_reason", cancelReason,
 					"duration_ms", time.Since(startedAt).Milliseconds(),
 				)
 				writeAdminError(w, http.StatusNotFound, access.RequestID, "replay job not found")
@@ -608,7 +699,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			)
 		})
 		mux.HandleFunc("GET /admin/poller-status", func(w http.ResponseWriter, r *http.Request) {
-			access, ok := requireAdminAccess(adminEndpointPollerStatus, w, r)
+			access, ok := requireAdminAccess(adminEndpointPollerStatus, adminScopeRead, w, r)
 			if !ok {
 				return
 			}
@@ -800,6 +891,44 @@ func authorizeAdminToken(actual, primary, secondary string) (authorized bool, to
 	return false, ""
 }
 
+func authorizeAdminTokenForScope(actual, scope, globalPrimary, globalSecondary, readToken, replayToken, cancelToken string) (bool, string) {
+	if ok, slot := authorizeAdminToken(actual, globalPrimary, globalSecondary); ok {
+		return true, slot
+	}
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	switch scope {
+	case adminScopeRead:
+		if secureTokenEqual(actual, readToken) {
+			return true, "read"
+		}
+		if secureTokenEqual(actual, replayToken) {
+			return true, "replay"
+		}
+		if secureTokenEqual(actual, cancelToken) {
+			return true, "cancel"
+		}
+	case adminScopeReplay:
+		if secureTokenEqual(actual, replayToken) {
+			return true, "replay"
+		}
+	case adminScopeCancel:
+		if secureTokenEqual(actual, cancelToken) {
+			return true, "cancel"
+		}
+	default:
+		return false, ""
+	}
+	return false, ""
+}
+
+func adminEndpointsEnabled(serverCfg config.ServerConfig) bool {
+	return strings.TrimSpace(serverCfg.AdminToken) != "" ||
+		strings.TrimSpace(serverCfg.AdminTokenSecondary) != "" ||
+		strings.TrimSpace(serverCfg.AdminTokenRead) != "" ||
+		strings.TrimSpace(serverCfg.AdminTokenReplay) != "" ||
+		strings.TrimSpace(serverCfg.AdminTokenCancel) != ""
+}
+
 func requesterIP(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -856,6 +985,23 @@ func parseOptionalBool(raw string, fallback bool) (bool, error) {
 		return false, fmt.Errorf("invalid boolean %q", raw)
 	}
 	return value, nil
+}
+
+func parseAdminReason(raw string, required bool, minLen int) (string, error) {
+	reason := strings.TrimSpace(raw)
+	if reason == "" {
+		if required {
+			return "", fmt.Errorf("X-Admin-Reason header is required")
+		}
+		return "", nil
+	}
+	if minLen <= 0 {
+		minLen = 1
+	}
+	if len(reason) < minLen {
+		return "", fmt.Errorf("X-Admin-Reason must be at least %d characters", minLen)
+	}
+	return reason, nil
 }
 
 func parseAdminAllowedCIDRs(raw []string) ([]*net.IPNet, error) {
@@ -1044,13 +1190,17 @@ type adminReplayJobSnapshot struct {
 	StartedAt      time.Time `json:"started_at,omitempty"`
 	CompletedAt    time.Time `json:"completed_at,omitempty"`
 	Replayed       int       `json:"replayed"`
+	OperatorReason string    `json:"operator_reason,omitempty"`
+	CancelReason   string    `json:"cancel_reason,omitempty"`
 	Error          string    `json:"error,omitempty"`
 }
 
 type adminReplayJob struct {
-	snapshot       adminReplayJobSnapshot
-	idempotencyKey string
-	updatedAt      time.Time
+	snapshot                adminReplayJobSnapshot
+	idempotencyKey          string
+	creatorIP               string
+	creatorTokenFingerprint string
+	updatedAt               time.Time
 }
 
 func adminReplayJobRequestEquivalent(existing, requested adminReplayJobSnapshot) bool {
@@ -1061,6 +1211,12 @@ func adminReplayJobRequestEquivalent(existing, requested adminReplayJobSnapshot)
 		existing.DryRun == requested.DryRun
 }
 
+type adminReplayJobCreateMeta struct {
+	OperatorReason          string
+	CreatorIP               string
+	CreatorTokenFingerprint string
+}
+
 type adminReplayJobRegistry struct {
 	mu            sync.RWMutex
 	jobs          map[string]*adminReplayJob
@@ -1068,33 +1224,113 @@ type adminReplayJobRegistry struct {
 	ttl           time.Duration
 	maxJobs       int
 	sequence      uint64
+	logger        *slog.Logger
+	sqliteStore   *adminReplayJobSQLiteStore
 }
 
 func newAdminReplayJobRegistry(maxJobs int, ttl time.Duration) *adminReplayJobRegistry {
+	registry, _ := newAdminReplayJobRegistryWithBackend(maxJobs, ttl, "memory", "", nil)
+	return registry
+}
+
+func newAdminReplayJobRegistryWithBackend(maxJobs int, ttl time.Duration, backend, sqlitePath string, logger *slog.Logger) (*adminReplayJobRegistry, error) {
 	if maxJobs <= 0 {
 		maxJobs = 512
 	}
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
-	return &adminReplayJobRegistry{
+	if logger == nil {
+		logger = slog.Default()
+	}
+	registry := &adminReplayJobRegistry{
 		jobs:          make(map[string]*adminReplayJob),
 		byIdempotency: make(map[string]string),
 		ttl:           ttl,
 		maxJobs:       maxJobs,
+		logger:        logger,
+	}
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "", "memory":
+		return registry, nil
+	case "sqlite":
+		store, err := newAdminReplayJobSQLiteStore(sqlitePath)
+		if err != nil {
+			return nil, err
+		}
+		registry.sqliteStore = store
+		loadedJobs, err := store.Load()
+		if err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		now := time.Now().UTC()
+		for _, job := range loadedJobs {
+			if job == nil || strings.TrimSpace(job.snapshot.JobID) == "" {
+				continue
+			}
+			registry.jobs[job.snapshot.JobID] = job
+			if job.idempotencyKey != "" {
+				registry.byIdempotency[job.idempotencyKey] = job.snapshot.JobID
+			}
+			if seq := adminReplaySequenceFromJobID(job.snapshot.JobID); seq > registry.sequence {
+				registry.sequence = seq
+			}
+		}
+		registry.cleanupLocked(now)
+		return registry, nil
+	default:
+		return nil, fmt.Errorf("unsupported admin replay registry backend %q", backend)
 	}
 }
 
+func adminReplaySequenceFromJobID(jobID string) uint64 {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return 0
+	}
+	parts := strings.Split(jobID, "_")
+	if len(parts) < 3 {
+		return 0
+	}
+	seq, err := strconv.ParseUint(strings.TrimSpace(parts[len(parts)-1]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return seq
+}
+
+func (r *adminReplayJobRegistry) Close() error {
+	if r == nil || r.sqliteStore == nil {
+		return nil
+	}
+	return r.sqliteStore.Close()
+}
+
 func (r *adminReplayJobRegistry) Create(base adminReplayJobSnapshot, idempotencyKey string) adminReplayJobSnapshot {
-	job, _, _ := r.GetOrCreate(base, idempotencyKey)
+	job, _, _, _, _, _ := r.GetOrCreateWithGuards(base, adminReplayJobCreateMeta{}, idempotencyKey, 0, 0)
 	return job
 }
 
 func (r *adminReplayJobRegistry) GetOrCreate(base adminReplayJobSnapshot, idempotencyKey string) (adminReplayJobSnapshot, bool, bool) {
+	job, reused, conflict, _, _, _ := r.GetOrCreateWithGuards(base, adminReplayJobCreateMeta{}, idempotencyKey, 0, 0)
+	return job, reused, conflict
+}
+
+func (r *adminReplayJobRegistry) GetOrCreateWithGuards(
+	base adminReplayJobSnapshot,
+	meta adminReplayJobCreateMeta,
+	idempotencyKey string,
+	maxQueuedPerIP int,
+	maxQueuedPerToken int,
+) (adminReplayJobSnapshot, bool, bool, bool, string, int) {
 	if r == nil {
-		return adminReplayJobSnapshot{}, false, false
+		return adminReplayJobSnapshot{}, false, false, false, "", 0
 	}
 	now := time.Now().UTC()
+	meta.OperatorReason = strings.TrimSpace(meta.OperatorReason)
+	meta.CreatorIP = strings.TrimSpace(meta.CreatorIP)
+	meta.CreatorTokenFingerprint = strings.TrimSpace(meta.CreatorTokenFingerprint)
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1102,9 +1338,21 @@ func (r *adminReplayJobRegistry) GetOrCreate(base adminReplayJobSnapshot, idempo
 	if idempotencyKey != "" {
 		if existing, found := r.getByIdempotencyKeyLocked(idempotencyKey); found {
 			if adminReplayJobRequestEquivalent(existing, base) {
-				return existing, true, false
+				return existing, true, false, false, "", 0
 			}
-			return existing, false, true
+			return existing, false, true, false, "", 0
+		}
+	}
+	if maxQueuedPerIP > 0 {
+		count := r.countQueuedByIPLocked(meta.CreatorIP)
+		if count >= maxQueuedPerIP {
+			return adminReplayJobSnapshot{}, false, false, true, "ip", count
+		}
+	}
+	if maxQueuedPerToken > 0 && meta.CreatorTokenFingerprint != "" {
+		count := r.countQueuedByTokenLocked(meta.CreatorTokenFingerprint)
+		if count >= maxQueuedPerToken {
+			return adminReplayJobSnapshot{}, false, false, true, "token", count
 		}
 	}
 	r.sequence++
@@ -1112,16 +1360,20 @@ func (r *adminReplayJobRegistry) GetOrCreate(base adminReplayJobSnapshot, idempo
 	base.JobID = jobID
 	base.Status = adminReplayJobStatusQueued
 	base.CreatedAt = now
+	base.OperatorReason = meta.OperatorReason
 	job := &adminReplayJob{
-		snapshot:       base,
-		idempotencyKey: idempotencyKey,
-		updatedAt:      now,
+		snapshot:                base,
+		idempotencyKey:          idempotencyKey,
+		creatorIP:               meta.CreatorIP,
+		creatorTokenFingerprint: meta.CreatorTokenFingerprint,
+		updatedAt:               now,
 	}
 	r.jobs[jobID] = job
 	if job.idempotencyKey != "" {
 		r.byIdempotency[job.idempotencyKey] = jobID
 	}
-	return base, false, false
+	r.persistJobLocked(job)
+	return base, false, false, false, "", 0
 }
 
 func (r *adminReplayJobRegistry) Get(jobID string) (adminReplayJobSnapshot, bool) {
@@ -1161,6 +1413,62 @@ func (r *adminReplayJobRegistry) getByIdempotencyKeyLocked(key string) (adminRep
 		return adminReplayJobSnapshot{}, false
 	}
 	return job.snapshot, true
+}
+
+func (r *adminReplayJobRegistry) countQueuedByIPLocked(ip string) int {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return 0
+	}
+	count := 0
+	for _, job := range r.jobs {
+		if job == nil {
+			continue
+		}
+		if job.snapshot.Status == adminReplayJobStatusQueued && job.creatorIP == ip {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *adminReplayJobRegistry) countQueuedByTokenLocked(tokenFingerprint string) int {
+	tokenFingerprint = strings.TrimSpace(tokenFingerprint)
+	if tokenFingerprint == "" {
+		return 0
+	}
+	count := 0
+	for _, job := range r.jobs {
+		if job == nil {
+			continue
+		}
+		if job.snapshot.Status == adminReplayJobStatusQueued && job.creatorTokenFingerprint == tokenFingerprint {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *adminReplayJobRegistry) persistJobLocked(job *adminReplayJob) {
+	if r == nil || r.sqliteStore == nil || job == nil {
+		return
+	}
+	if err := r.sqliteStore.Upsert(job); err != nil {
+		if r.logger != nil {
+			r.logger.Warn("persist admin replay job", "job_id", job.snapshot.JobID, "error", err)
+		}
+	}
+}
+
+func (r *adminReplayJobRegistry) deletePersistedJobLocked(jobID string) {
+	if r == nil || r.sqliteStore == nil {
+		return
+	}
+	if err := r.sqliteStore.Delete(jobID); err != nil {
+		if r.logger != nil {
+			r.logger.Warn("delete persisted admin replay job", "job_id", jobID, "error", err)
+		}
+	}
 }
 
 func (r *adminReplayJobRegistry) List(statusFilter string, limit int, cursorCreatedAt time.Time, cursorJobID string) ([]adminReplayJobSnapshot, map[string]int, string) {
@@ -1260,6 +1568,7 @@ func (r *adminReplayJobRegistry) MarkRunning(jobID string) bool {
 	job.snapshot.Status = adminReplayJobStatusRunning
 	job.snapshot.StartedAt = now
 	job.updatedAt = now
+	r.persistJobLocked(job)
 	return true
 }
 
@@ -1280,8 +1589,9 @@ func (r *adminReplayJobRegistry) MarkFailed(jobID, message string) {
 	})
 }
 
-func (r *adminReplayJobRegistry) CancelQueued(jobID string) (adminReplayJobSnapshot, bool, bool) {
+func (r *adminReplayJobRegistry) CancelQueued(jobID, reason string) (adminReplayJobSnapshot, bool, bool) {
 	jobID = strings.TrimSpace(jobID)
+	reason = strings.TrimSpace(reason)
 	if r == nil || jobID == "" {
 		return adminReplayJobSnapshot{}, false, false
 	}
@@ -1298,8 +1608,14 @@ func (r *adminReplayJobRegistry) CancelQueued(jobID string) (adminReplayJobSnaps
 	}
 	job.snapshot.Status = adminReplayJobStatusCancelled
 	job.snapshot.CompletedAt = now
-	job.snapshot.Error = "cancelled by operator"
+	job.snapshot.CancelReason = reason
+	if reason == "" {
+		job.snapshot.Error = "cancelled by operator"
+	} else {
+		job.snapshot.Error = "cancelled by operator: " + reason
+	}
 	job.updatedAt = now
+	r.persistJobLocked(job)
 	return job.snapshot, true, true
 }
 
@@ -1318,6 +1634,7 @@ func (r *adminReplayJobRegistry) update(jobID string, mutate func(snapshot *admi
 	}
 	mutate(&job.snapshot)
 	job.updatedAt = time.Now().UTC()
+	r.persistJobLocked(job)
 }
 
 func (r *adminReplayJobRegistry) cleanupLocked(now time.Time) {
@@ -1331,6 +1648,7 @@ func (r *adminReplayJobRegistry) cleanupLocked(now time.Time) {
 			if job != nil && job.idempotencyKey != "" {
 				delete(r.byIdempotency, job.idempotencyKey)
 			}
+			r.deletePersistedJobLocked(jobID)
 		}
 	}
 	for len(r.jobs) > r.maxJobs {
@@ -1353,6 +1671,7 @@ func (r *adminReplayJobRegistry) cleanupLocked(now time.Time) {
 			delete(r.byIdempotency, job.idempotencyKey)
 		}
 		delete(r.jobs, oldestID)
+		r.deletePersistedJobLocked(oldestID)
 	}
 }
 
