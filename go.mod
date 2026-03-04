@@ -1,6 +1,6 @@
 module github.com/evalops/ensemble-tap
 
-go 1.24.0
+go 1.24.13
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.40.3

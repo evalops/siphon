@@ -104,8 +104,10 @@ func TestQuickBooksFetcher(t *testing.T) {
 	var gotAuth string
 	var gotPath string
 	var gotQuery string
+	requestCount := 0
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
 		gotQuery = r.URL.Query().Get("query")
@@ -143,6 +145,130 @@ func TestQuickBooksFetcher(t *testing.T) {
 	}
 	if len(res.Entities) != 1 || res.Entities[0].EntityID != "qb_1" {
 		t.Fatalf("unexpected quickbooks entities: %+v", res.Entities)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected a single quickbooks request when totalCount is absent and page is short, got %d", requestCount)
+	}
+}
+
+func TestHubSpotFetcherPagination(t *testing.T) {
+	requestCount := 0
+	var seenAfter []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		_ = json.Unmarshal(body, &req)
+		seenAfter = append(seenAfter, toString(req["after"]))
+
+		if requestCount == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []any{
+					map[string]any{
+						"id": "deal_1",
+						"properties": map[string]any{
+							"hs_lastmodifieddate": "2026-03-03T14:22:00Z",
+						},
+					},
+				},
+				"paging": map[string]any{
+					"next": map[string]any{"after": "cursor-2"},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []any{
+				map[string]any{
+					"id": "deal_2",
+					"properties": map[string]any{
+						"hs_lastmodifieddate": "2026-03-03T14:30:00Z",
+					},
+				},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	f := &HubSpotFetcher{
+		BaseURL: ts.URL,
+		Token:   "hubspot-token",
+		Objects: []string{"deals"},
+		Limit:   1,
+	}
+	res, err := f.Fetch(context.Background(), "2026-03-03T14:00:00Z")
+	if err != nil {
+		t.Fatalf("fetch hubspot with pagination: %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected 2 hubspot requests, got %d", requestCount)
+	}
+	if len(seenAfter) != 2 || seenAfter[0] != "" || seenAfter[1] != "cursor-2" {
+		t.Fatalf("unexpected after cursors: %#v", seenAfter)
+	}
+	if len(res.Entities) != 2 {
+		t.Fatalf("expected 2 hubspot entities, got %d", len(res.Entities))
+	}
+	if res.NextCheckpoint != "2026-03-03T14:30:00Z" {
+		t.Fatalf("unexpected hubspot checkpoint: %q", res.NextCheckpoint)
+	}
+}
+
+func TestQuickBooksFetcherPagination(t *testing.T) {
+	requestCount := 0
+	var queries []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		query := r.URL.Query().Get("query")
+		queries = append(queries, query)
+
+		if requestCount == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"QueryResponse": map[string]any{
+					"totalCount": "3",
+					"Customer": []any{
+						map[string]any{"Id": "qb_1", "MetaData": map[string]any{"LastUpdatedTime": "2026-03-03T16:00:00Z"}},
+						map[string]any{"Id": "qb_2", "MetaData": map[string]any{"LastUpdatedTime": "2026-03-03T16:10:00Z"}},
+					},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"QueryResponse": map[string]any{
+				"totalCount": "3",
+				"Customer": []any{
+					map[string]any{"Id": "qb_3", "MetaData": map[string]any{"LastUpdatedTime": "2026-03-03T16:20:00Z"}},
+				},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	f := &QuickBooksFetcher{
+		BaseURL:      ts.URL,
+		AccessToken:  "qb-token",
+		RealmID:      "realm-1",
+		Entities:     []string{"Customer"},
+		QueryPerPage: 2,
+	}
+	res, err := f.Fetch(context.Background(), "2026-03-03T14:00:00Z")
+	if err != nil {
+		t.Fatalf("fetch quickbooks with pagination: %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected 2 quickbooks requests, got %d", requestCount)
+	}
+	if len(queries) != 2 ||
+		!strings.Contains(queries[0], "STARTPOSITION 1") ||
+		!strings.Contains(queries[1], "STARTPOSITION 3") {
+		t.Fatalf("unexpected quickbooks pagination queries: %#v", queries)
+	}
+	if len(res.Entities) != 3 {
+		t.Fatalf("expected 3 quickbooks entities, got %d", len(res.Entities))
+	}
+	if res.NextCheckpoint != "2026-03-03T16:20:00Z" {
+		t.Fatalf("unexpected quickbooks checkpoint: %q", res.NextCheckpoint)
 	}
 }
 

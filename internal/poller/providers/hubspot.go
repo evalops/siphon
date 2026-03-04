@@ -59,57 +59,77 @@ func (h *HubSpotFetcher) Fetch(ctx context.Context, checkpoint string) (poller.F
 	}
 
 	for _, object := range objects {
-		reqPayload := map[string]any{"limit": limit}
-		if !cp.IsZero() {
-			reqPayload["filterGroups"] = []any{map[string]any{"filters": []any{map[string]any{
-				"propertyName": "hs_lastmodifieddate",
-				"operator":     "GT",
-				"value":        strconv.FormatInt(cp.UnixMilli(), 10),
-			}}}}
-		}
-		body, _ := json.Marshal(reqPayload)
-
 		url := trimTrailingSlash(h.BaseURL) + "/crm/v3/objects/" + strings.TrimSpace(object) + "/search"
-		respBody, err := doAuthenticatedRequest(ctx, client, &token, oauth, "hubspot", func(accessToken string) (*http.Request, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		after := ""
+		for {
+			reqPayload := map[string]any{"limit": limit}
+			if !cp.IsZero() {
+				reqPayload["filterGroups"] = []any{map[string]any{"filters": []any{map[string]any{
+					"propertyName": "hs_lastmodifieddate",
+					"operator":     "GT",
+					"value":        strconv.FormatInt(cp.UnixMilli(), 10),
+				}}}}
+			}
+			if strings.TrimSpace(after) != "" {
+				reqPayload["after"] = after
+			}
+			body, err := json.Marshal(reqPayload)
 			if err != nil {
-				return nil, fmt.Errorf("build hubspot request: %w", err)
+				return poller.FetchResult{}, fmt.Errorf("marshal hubspot request payload: %w", err)
 			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+accessToken)
-			return req, nil
-		})
-		if err != nil {
-			return poller.FetchResult{}, fmt.Errorf("hubspot request failed: %w", err)
-		}
 
-		var out struct {
-			Results []struct {
-				ID         string         `json:"id"`
-				Properties map[string]any `json:"properties"`
-			} `json:"results"`
-		}
-		if err := json.Unmarshal(respBody, &out); err != nil {
-			return poller.FetchResult{}, fmt.Errorf("decode hubspot response: %w", err)
-		}
-
-		for _, item := range out.Results {
-			snapshot := cloneMap(item.Properties)
-			snapshot["id"] = item.ID
-			updated := parseTimeAny(item.Properties["hs_lastmodifieddate"])
-			if updated.IsZero() {
-				updated = time.Now().UTC()
-			}
-			if next.IsZero() || updated.After(next) {
-				next = updated
-			}
-			entities = append(entities, poller.Entity{
-				Provider:   "hubspot",
-				EntityType: strings.ToLower(strings.TrimSpace(object)),
-				EntityID:   item.ID,
-				Snapshot:   snapshot,
-				UpdatedAt:  updated,
+			respBody, err := doAuthenticatedRequest(ctx, client, &token, oauth, "hubspot", func(accessToken string) (*http.Request, error) {
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+				if err != nil {
+					return nil, fmt.Errorf("build hubspot request: %w", err)
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer "+accessToken)
+				return req, nil
 			})
+			if err != nil {
+				return poller.FetchResult{}, fmt.Errorf("hubspot request failed: %w", err)
+			}
+
+			var out struct {
+				Results []struct {
+					ID         string         `json:"id"`
+					Properties map[string]any `json:"properties"`
+				} `json:"results"`
+				Paging struct {
+					Next struct {
+						After string `json:"after"`
+					} `json:"next"`
+				} `json:"paging"`
+			}
+			if err := json.Unmarshal(respBody, &out); err != nil {
+				return poller.FetchResult{}, fmt.Errorf("decode hubspot response: %w", err)
+			}
+
+			for _, item := range out.Results {
+				snapshot := cloneMap(item.Properties)
+				snapshot["id"] = item.ID
+				updated := parseTimeAny(item.Properties["hs_lastmodifieddate"])
+				if updated.IsZero() {
+					updated = time.Now().UTC()
+				}
+				if next.IsZero() || updated.After(next) {
+					next = updated
+				}
+				entities = append(entities, poller.Entity{
+					Provider:   "hubspot",
+					EntityType: strings.ToLower(strings.TrimSpace(object)),
+					EntityID:   item.ID,
+					Snapshot:   snapshot,
+					UpdatedAt:  updated,
+				})
+			}
+
+			nextAfter := strings.TrimSpace(out.Paging.Next.After)
+			if nextAfter == "" || nextAfter == after {
+				break
+			}
+			after = nextAfter
 		}
 	}
 	h.Token = token

@@ -64,65 +64,104 @@ func (q *QuickBooksFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 	}
 
 	for _, entityName := range entitiesList {
-		query := fmt.Sprintf("SELECT * FROM %s", entityName)
-		if !cp.IsZero() {
-			query += " WHERE MetaData.LastUpdatedTime > '" + cp.UTC().Format(time.RFC3339) + "'"
-		}
-		query += " ORDERBY MetaData.LastUpdatedTime STARTPOSITION 1 MAXRESULTS " + strconv.Itoa(limit)
+		startPosition := 1
+		seenEntityNames := map[string]struct{}{}
+		for {
+			query := fmt.Sprintf("SELECT * FROM %s", entityName)
+			if !cp.IsZero() {
+				query += " WHERE MetaData.LastUpdatedTime > '" + cp.UTC().Format(time.RFC3339) + "'"
+			}
+			query += " ORDERBY MetaData.LastUpdatedTime STARTPOSITION " + strconv.Itoa(startPosition) + " MAXRESULTS " + strconv.Itoa(limit)
 
-		endpoint := fmt.Sprintf("%s/v3/company/%s/query?query=%s", base, q.RealmID, url.QueryEscape(query))
-		body, err := doAuthenticatedRequest(ctx, client, &token, oauth, "quickbooks", func(accessToken string) (*http.Request, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+			endpoint := fmt.Sprintf("%s/v3/company/%s/query?query=%s", base, q.RealmID, url.QueryEscape(query))
+			body, err := doAuthenticatedRequest(ctx, client, &token, oauth, "quickbooks", func(accessToken string) (*http.Request, error) {
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+				if err != nil {
+					return nil, fmt.Errorf("build quickbooks request: %w", err)
+				}
+				req.Header.Set("Authorization", "Bearer "+accessToken)
+				req.Header.Set("Accept", "application/json")
+				return req, nil
+			})
 			if err != nil {
-				return nil, fmt.Errorf("build quickbooks request: %w", err)
+				return poller.FetchResult{}, fmt.Errorf("quickbooks request failed: %w", err)
 			}
-			req.Header.Set("Authorization", "Bearer "+accessToken)
-			req.Header.Set("Accept", "application/json")
-			return req, nil
-		})
-		if err != nil {
-			return poller.FetchResult{}, fmt.Errorf("quickbooks request failed: %w", err)
-		}
 
-		var out map[string]any
-		if err := json.Unmarshal(body, &out); err != nil {
-			return poller.FetchResult{}, fmt.Errorf("decode quickbooks response: %w", err)
-		}
-		qr, _ := out["QueryResponse"].(map[string]any)
-		for key, value := range qr {
-			if key == "startPosition" || key == "maxResults" || key == "totalCount" {
-				continue
+			var out struct {
+				QueryResponse map[string]any `json:"QueryResponse"`
 			}
-			records, ok := value.([]any)
-			if !ok {
-				continue
+			if err := json.Unmarshal(body, &out); err != nil {
+				return poller.FetchResult{}, fmt.Errorf("decode quickbooks response: %w", err)
 			}
-			for _, item := range records {
-				rec, ok := item.(map[string]any)
+			qr := out.QueryResponse
+
+			pageRecords := 0
+			totalCount := 0
+			if v := toString(qr["totalCount"]); v != "" {
+				totalCount, _ = strconv.Atoi(v)
+			}
+
+			for key, value := range qr {
+				if key == "startPosition" || key == "maxResults" || key == "totalCount" {
+					continue
+				}
+				records, ok := value.([]any)
 				if !ok {
 					continue
 				}
-				id := toString(rec["Id"])
-				if id == "" {
-					continue
-				}
-				updated := time.Now().UTC()
-				if md, ok := rec["MetaData"].(map[string]any); ok {
-					if ts := parseTimeAny(md["LastUpdatedTime"]); !ts.IsZero() {
-						updated = ts
+				seenEntityNames[key] = struct{}{}
+				for _, item := range records {
+					rec, ok := item.(map[string]any)
+					if !ok {
+						continue
 					}
+					id := toString(rec["Id"])
+					if id == "" {
+						continue
+					}
+					updated := time.Now().UTC()
+					if md, ok := rec["MetaData"].(map[string]any); ok {
+						if ts := parseTimeAny(md["LastUpdatedTime"]); !ts.IsZero() {
+							updated = ts
+						}
+					}
+					if next.IsZero() || updated.After(next) {
+						next = updated
+					}
+					entities = append(entities, poller.Entity{
+						Provider:   "quickbooks",
+						EntityType: strings.ToLower(strings.TrimSpace(key)),
+						EntityID:   id,
+						Snapshot:   cloneMap(rec),
+						UpdatedAt:  updated,
+					})
+					pageRecords++
 				}
-				if next.IsZero() || updated.After(next) {
-					next = updated
-				}
-				entities = append(entities, poller.Entity{
-					Provider:   "quickbooks",
-					EntityType: strings.ToLower(strings.TrimSpace(key)),
-					EntityID:   id,
-					Snapshot:   cloneMap(rec),
-					UpdatedAt:  updated,
-				})
 			}
+
+			// If no records were returned for this page, pagination is complete.
+			if pageRecords == 0 {
+				break
+			}
+			// Without totalCount, a short page indicates completion.
+			if totalCount == 0 && pageRecords < limit {
+				break
+			}
+
+			nextPosition := startPosition + pageRecords
+			// Stop when server-reported total count has been exhausted.
+			if totalCount > 0 && nextPosition > totalCount {
+				break
+			}
+			// Defensive loop break: if the next cursor would not move forward.
+			if nextPosition <= startPosition {
+				break
+			}
+			// Stop if entity name mapping is unstable, to avoid mixing collections between pages.
+			if len(seenEntityNames) > 1 {
+				break
+			}
+			startPosition = nextPosition
 		}
 	}
 	q.AccessToken = token

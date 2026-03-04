@@ -131,6 +131,10 @@ func doAuthenticatedRequest(
 		if err != nil {
 			return nil, nil, err
 		}
+		if err := validateOutboundRequest(req); err != nil {
+			return nil, nil, err
+		}
+		// #nosec G704 -- outbound URL is validated and sourced from operator-controlled provider config.
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, nil, err
@@ -176,6 +180,14 @@ func doAuthenticatedRequest(
 }
 
 func refreshAccessToken(ctx context.Context, client *http.Client, cfg OAuthRefreshConfig) (string, error) {
+	tokenURL, err := url.Parse(strings.TrimSpace(cfg.TokenURL))
+	if err != nil {
+		return "", fmt.Errorf("parse token url: %w", err)
+	}
+	if err := validateOutboundURL(tokenURL); err != nil {
+		return "", fmt.Errorf("invalid token url: %w", err)
+	}
+
 	values := url.Values{}
 	values.Set("client_id", cfg.ClientID)
 	values.Set("client_secret", cfg.ClientSecret)
@@ -189,12 +201,13 @@ func refreshAccessToken(ctx context.Context, client *http.Client, cfg OAuthRefre
 		values.Set("scope", cfg.Scope)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, bytes.NewBufferString(values.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL.String(), bytes.NewBufferString(values.Encode()))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
+	// #nosec G704 -- token endpoint URL is validated and sourced from operator-controlled provider config.
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -239,4 +252,28 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max]
+}
+
+func validateOutboundRequest(req *http.Request) error {
+	if req == nil || req.URL == nil {
+		return fmt.Errorf("request URL is required")
+	}
+	return validateOutboundURL(req.URL)
+}
+
+func validateOutboundURL(raw *url.URL) error {
+	if raw == nil {
+		return fmt.Errorf("URL is required")
+	}
+	scheme := strings.ToLower(strings.TrimSpace(raw.Scheme))
+	if scheme != "https" && scheme != "http" {
+		return fmt.Errorf("unsupported URL scheme %q", raw.Scheme)
+	}
+	if strings.TrimSpace(raw.Hostname()) == "" {
+		return fmt.Errorf("missing URL host")
+	}
+	if raw.User != nil {
+		return fmt.Errorf("URL userinfo is not allowed")
+	}
+	return nil
 }

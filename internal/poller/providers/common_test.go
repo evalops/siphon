@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,5 +123,66 @@ func TestDoAuthenticatedRequestReturnsRateLimitedError(t *testing.T) {
 	}
 	if rl.RetryAfter != 3*time.Second {
 		t.Fatalf("expected retry-after of 3s, got %s", rl.RetryAfter)
+	}
+}
+
+func TestDoAuthenticatedRequestRejectsUnsupportedURLScheme(t *testing.T) {
+	token := "token"
+	_, err := doAuthenticatedRequest(context.Background(), &http.Client{Timeout: time.Second}, &token, OAuthRefreshConfig{}, "hubspot", func(accessToken string) (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, "ftp://example.com/data", nil)
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		return req, nil
+	})
+	if err == nil {
+		t.Fatalf("expected unsupported scheme error")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "unsupported URL scheme") {
+		t.Fatalf("expected unsupported scheme error, got %q", got)
+	}
+}
+
+func TestRefreshAccessTokenRejectsInvalidTokenURL(t *testing.T) {
+	_, err := refreshAccessToken(context.Background(), &http.Client{Timeout: time.Second}, OAuthRefreshConfig{
+		TokenURL:     "ftp://example.com/token",
+		ClientID:     "cid",
+		ClientSecret: "secret",
+	})
+	if err == nil {
+		t.Fatalf("expected invalid token URL error")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "invalid token url") {
+		t.Fatalf("expected invalid token URL error, got %q", got)
+	}
+}
+
+func TestValidateOutboundURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawURL  string
+		wantErr bool
+	}{
+		{name: "https", rawURL: "https://api.example.com/v1/data"},
+		{name: "http", rawURL: "http://127.0.0.1:8080/health"},
+		{name: "missing host", rawURL: "https:///path", wantErr: true},
+		{name: "unsupported scheme", rawURL: "ftp://example.com/path", wantErr: true},
+		{name: "userinfo", rawURL: "https://user:pass@example.com/path", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := url.Parse(tc.rawURL)
+			if err != nil {
+				t.Fatalf("parse test URL %q: %v", tc.rawURL, err)
+			}
+			err = validateOutboundURL(parsed)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %q", tc.rawURL)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.rawURL, err)
+			}
+		})
 	}
 }

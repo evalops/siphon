@@ -17,10 +17,10 @@ vet:
 	$(GO) vet ./...
 
 staticcheck-install:
-	GOTOOLCHAIN=go1.24.0 $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
+	GOTOOLCHAIN=go1.24.13 $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 
 staticcheck: staticcheck-install
-	GOTOOLCHAIN=go1.24.0 $(STATICCHECK_BIN) ./...
+	GOTOOLCHAIN=go1.24.13 $(STATICCHECK_BIN) ./...
 
 coverage:
 	$(GO) test ./... -coverprofile=/tmp/ensemble-tap.coverage.out
