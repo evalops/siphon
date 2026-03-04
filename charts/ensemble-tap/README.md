@@ -32,6 +32,8 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --set config.server.admin_token='${TAP_ADMIN_TOKEN}' \
   --set config.server.admin_token_secondary='${TAP_ADMIN_TOKEN_SECONDARY}' \
   --set config.server.admin_replay_max_limit=2000 \
+  --set config.server.admin_replay_job_ttl=24h \
+  --set config.server.admin_replay_job_max_jobs=512 \
   --set config.server.admin_rate_limit_per_sec=5 \
   --set config.server.admin_rate_limit_burst=20 \
   --set config.server.admin_allowed_cidrs[0]=203.0.113.0/24 \
@@ -41,6 +43,7 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
 
 Notes:
 - `config.server.admin_replay_max_limit` is validated in chart schema and runtime (`1..100000`).
+- `config.server.admin_replay_job_ttl` and `config.server.admin_replay_job_max_jobs` control in-memory replay-job retention and capacity.
 - `config.server.admin_token_secondary` should only be used with `config.server.admin_token`.
 - `config.server.admin_rate_limit_per_sec` and `config.server.admin_rate_limit_burst` must both be greater than `0`.
 - `config.server.admin_allowed_cidrs` and `config.server.admin_mtls_required` provide network and client-cert guardrails for admin routes.

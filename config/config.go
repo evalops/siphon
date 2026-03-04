@@ -18,6 +18,9 @@ const (
 	envPrefix                   = "TAP_"
 	defaultAdminReplayMaxLimit  = 2000
 	maxAdminReplayMaxLimit      = 100000
+	defaultAdminReplayJobTTL    = 24 * time.Hour
+	defaultAdminReplayJobMax    = 512
+	maxAdminReplayJobMax        = 100000
 	defaultAdminRateLimitPerSec = 5.0
 	defaultAdminRateLimitBurst  = 20
 )
@@ -101,6 +104,8 @@ type ServerConfig struct {
 	AdminToken                string        `koanf:"admin_token"`
 	AdminTokenSecondary       string        `koanf:"admin_token_secondary"`
 	AdminReplayMaxLimit       int           `koanf:"admin_replay_max_limit"`
+	AdminReplayJobTTL         time.Duration `koanf:"admin_replay_job_ttl"`
+	AdminReplayJobMaxJobs     int           `koanf:"admin_replay_job_max_jobs"`
 	AdminRateLimitPerSec      float64       `koanf:"admin_rate_limit_per_sec"`
 	AdminRateLimitBurst       int           `koanf:"admin_rate_limit_burst"`
 	AdminAllowedCIDRs         []string      `koanf:"admin_allowed_cidrs"`
@@ -162,6 +167,12 @@ func (c *Config) ApplyDefaults() {
 	if c.Server.AdminReplayMaxLimit == 0 {
 		c.Server.AdminReplayMaxLimit = defaultAdminReplayMaxLimit
 	}
+	if c.Server.AdminReplayJobTTL == 0 {
+		c.Server.AdminReplayJobTTL = defaultAdminReplayJobTTL
+	}
+	if c.Server.AdminReplayJobMaxJobs == 0 {
+		c.Server.AdminReplayJobMaxJobs = defaultAdminReplayJobMax
+	}
 	if c.Server.AdminRateLimitPerSec == 0 {
 		c.Server.AdminRateLimitPerSec = defaultAdminRateLimitPerSec
 	}
@@ -190,6 +201,12 @@ func (c Config) Validate() error {
 	}
 	if c.Server.AdminReplayMaxLimit <= 0 || c.Server.AdminReplayMaxLimit > maxAdminReplayMaxLimit {
 		return fmt.Errorf("server.admin_replay_max_limit must be in range 1..%d", maxAdminReplayMaxLimit)
+	}
+	if c.Server.AdminReplayJobTTL <= 0 {
+		return fmt.Errorf("server.admin_replay_job_ttl must be greater than 0")
+	}
+	if c.Server.AdminReplayJobMaxJobs <= 0 || c.Server.AdminReplayJobMaxJobs > maxAdminReplayJobMax {
+		return fmt.Errorf("server.admin_replay_job_max_jobs must be in range 1..%d", maxAdminReplayJobMax)
 	}
 	if c.Server.AdminRateLimitPerSec <= 0 {
 		return fmt.Errorf("server.admin_rate_limit_per_sec must be greater than 0")

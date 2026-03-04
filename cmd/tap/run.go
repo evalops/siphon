@@ -137,7 +137,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		adminMTLSClientCertHeader := strings.TrimSpace(cfg.Server.AdminMTLSClientCertHeader)
 		retryAfterSeconds := adminRetryAfterSeconds(adminRateLimitPerSec)
 		adminLimiters := newAdminRateLimiterRegistry(rate.Limit(adminRateLimitPerSec), adminRateLimitBurst)
-		replayJobs := newAdminReplayJobRegistry(512, 24*time.Hour)
+		replayJobs := newAdminReplayJobRegistry(cfg.Server.AdminReplayJobMaxJobs, cfg.Server.AdminReplayJobTTL)
 		observeAdmin := func(endpoint, outcome string, startedAt time.Time) {
 			metrics.AdminRequestsTotal.WithLabelValues(endpoint, outcome).Inc()
 			metrics.AdminRequestDurationSeconds.WithLabelValues(endpoint, outcome).Observe(time.Since(startedAt).Seconds())

@@ -72,6 +72,7 @@ When `server.admin_token` is set, these endpoints are available:
   - `limit` must be a positive integer.
   - `dry_run=true` computes replayable count without consuming DLQ entries.
   - Replay is capped by `server.admin_replay_max_limit` (default `2000`, valid range `1..100000`); accepted response includes replay job metadata (`job_id`, `status`, `effective_limit`, `max_limit`, `capped`, `dry_run`).
+  - Replay job metadata retention/capacity is configurable (`server.admin_replay_job_ttl`, `server.admin_replay_job_max_jobs`).
 - `GET /admin/replay-dlq/{job_id}`
   - Requires header `X-Admin-Token`.
   - Returns current replay job state (`queued`, `running`, `succeeded`, `failed`) and result fields (`replayed`, `error`).
