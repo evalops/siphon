@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -290,6 +291,190 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Server.AdminMTLSClientCertHeader) == "" {
 		return fmt.Errorf("server.admin_mtls_client_cert_header must not be empty")
+	}
+	if err := validateProviders(c.Providers); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProviders(providers map[string]ProviderConfig) error {
+	for name, providerCfg := range providers {
+		providerName := strings.ToLower(strings.TrimSpace(name))
+		if providerName == "" {
+			return fmt.Errorf("providers contains an empty provider key")
+		}
+
+		mode := normalizeProviderMode(providerCfg.Mode)
+		if modeContainsWebhook(mode) {
+			if err := validateWebhookProvider(providerName, providerCfg); err != nil {
+				return err
+			}
+		}
+		if modeContainsPoll(mode) {
+			if err := validatePollProvider(providerName, providerCfg); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeProviderMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	mode = strings.ReplaceAll(mode, " ", "")
+	return mode
+}
+
+func modeContainsWebhook(mode string) bool {
+	mode = normalizeProviderMode(mode)
+	if mode == "" {
+		// Webhook ingress accepts configured providers even without explicit mode.
+		return true
+	}
+	return strings.Contains(mode, "webhook")
+}
+
+func modeContainsPoll(mode string) bool {
+	mode = normalizeProviderMode(mode)
+	return strings.Contains(mode, "poll")
+}
+
+func validateWebhookProvider(providerName string, providerCfg ProviderConfig) error {
+	hasWebhookSecret := func(cfg ProviderConfig) bool {
+		if providerName == "hubspot" {
+			return strings.TrimSpace(cfg.Secret) != "" || strings.TrimSpace(cfg.ClientSecret) != ""
+		}
+		return strings.TrimSpace(cfg.Secret) != ""
+	}
+	if hasWebhookSecret(providerCfg) {
+		return nil
+	}
+	for tenantKey := range providerCfg.Tenants {
+		tenantCfg := ApplyProviderTenant(providerCfg, tenantKey)
+		if hasWebhookSecret(tenantCfg) {
+			return nil
+		}
+	}
+	if providerName == "hubspot" {
+		return fmt.Errorf("providers.%s webhook mode requires secret or client_secret (base or tenant override)", providerName)
+	}
+	return fmt.Errorf("providers.%s webhook mode requires secret (base or tenant override)", providerName)
+}
+
+func validatePollProvider(providerName string, providerCfg ProviderConfig) error {
+	targets := buildPollTargetsForValidation(providerCfg)
+	if len(targets) == 0 {
+		return fmt.Errorf("providers.%s poll mode has no poll targets with credentials", providerName)
+	}
+
+	for _, target := range targets {
+		var err error
+		switch providerName {
+		case "hubspot":
+			err = validateHubSpotPollTarget(target)
+		case "salesforce":
+			err = validateSalesforcePollTarget(target)
+		case "quickbooks":
+			err = validateQuickBooksPollTarget(target)
+		case "notion":
+			err = validateNotionPollTarget(target)
+		default:
+			return fmt.Errorf("providers.%s poll mode is not supported", providerName)
+		}
+		if err == nil {
+			continue
+		}
+		targetScope := "base"
+		if tenantID := strings.TrimSpace(target.TenantID); tenantID != "" {
+			targetScope = fmt.Sprintf("tenant %q", tenantID)
+		}
+		return fmt.Errorf("providers.%s poll target %s is invalid: %w", providerName, targetScope, err)
+	}
+	return nil
+}
+
+func buildPollTargetsForValidation(base ProviderConfig) []ProviderConfig {
+	targets := make([]ProviderConfig, 0)
+	seen := map[string]struct{}{}
+
+	addTarget := func(candidate ProviderConfig) {
+		tenantID := strings.TrimSpace(candidate.TenantID)
+		key := tenantID
+		if key == "" {
+			key = "__default__"
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, candidate)
+	}
+
+	if len(base.Tenants) == 0 || hasBasePollCredentials(base) {
+		addTarget(ApplyProviderTenant(base, strings.TrimSpace(base.TenantID)))
+	}
+	if len(base.Tenants) == 0 {
+		return targets
+	}
+
+	tenantKeys := make([]string, 0, len(base.Tenants))
+	for tenantKey := range base.Tenants {
+		tenantKeys = append(tenantKeys, tenantKey)
+	}
+	sort.Strings(tenantKeys)
+	for _, tenantKey := range tenantKeys {
+		addTarget(ApplyProviderTenant(base, tenantKey))
+	}
+	return targets
+}
+
+func hasBasePollCredentials(cfg ProviderConfig) bool {
+	return strings.TrimSpace(cfg.AccessToken) != "" ||
+		strings.TrimSpace(cfg.APIKey) != "" ||
+		strings.TrimSpace(cfg.Secret) != "" ||
+		strings.TrimSpace(cfg.RefreshToken) != ""
+}
+
+func validateHubSpotPollTarget(cfg ProviderConfig) error {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return fmt.Errorf("base_url is required")
+	}
+	if strings.TrimSpace(cfg.AccessToken) == "" && strings.TrimSpace(cfg.APIKey) == "" {
+		return fmt.Errorf("access_token or api_key is required")
+	}
+	return nil
+}
+
+func validateSalesforcePollTarget(cfg ProviderConfig) error {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return fmt.Errorf("base_url is required")
+	}
+	if strings.TrimSpace(cfg.AccessToken) == "" && strings.TrimSpace(cfg.Secret) == "" {
+		return fmt.Errorf("access_token or secret is required")
+	}
+	return nil
+}
+
+func validateQuickBooksPollTarget(cfg ProviderConfig) error {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return fmt.Errorf("base_url is required")
+	}
+	if strings.TrimSpace(cfg.RealmID) == "" {
+		return fmt.Errorf("realm_id is required")
+	}
+	if strings.TrimSpace(cfg.AccessToken) == "" && strings.TrimSpace(cfg.Secret) == "" {
+		return fmt.Errorf("access_token or secret is required")
+	}
+	return nil
+}
+
+func validateNotionPollTarget(cfg ProviderConfig) error {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return fmt.Errorf("base_url is required")
+	}
+	if strings.TrimSpace(cfg.AccessToken) == "" && strings.TrimSpace(cfg.Secret) == "" {
+		return fmt.Errorf("access_token or secret is required")
 	}
 	return nil
 }

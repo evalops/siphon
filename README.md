@@ -33,6 +33,8 @@ Ensemble Tap is a standalone Go service that ingests SaaS webhook events, normal
 cp config.example.yaml config.yaml
 ```
 
+Configure provider credentials (or remove providers you are not enabling) before startup; runtime now validates webhook/poll provider configs at boot.
+
 2. Start dependencies + tap:
 
 ```bash
@@ -52,6 +54,7 @@ docker compose up --build
 ```bash
 go test ./...
 go run ./cmd/tap -config ./config.yaml
+make ci-local
 ```
 
 ## Poll State Backends
@@ -169,7 +172,7 @@ See chart-specific usage in `charts/ensemble-tap/README.md`.
 
 ## Release and Operations
 
-- CI workflow validates unit tests, OpenAPI contract/runtime parity, Docker build, Helm chart render/lint, and real NATS+ClickHouse integration.
+- CI workflow validates unit tests, static analysis (`staticcheck`), OpenAPI contract/runtime parity, Docker build, Helm chart render/lint, and real NATS+ClickHouse integration.
 - CI security gates run `gosec`, `govulncheck`, Trivy CRITICAL scan, and source SBOM generation.
 - CI performance smoke gate runs a lightweight `k6` probe against `/livez` and `/readyz`.
 - Tag pushes matching `v*` trigger release workflow to publish multi-arch images to GHCR, generate source/image SBOMs, sign image digests with cosign keyless OIDC, and package the Helm chart.

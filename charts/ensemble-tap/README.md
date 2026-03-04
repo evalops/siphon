@@ -75,7 +75,7 @@ Notes:
 ## Ops hardening defaults
 
 - `podDisruptionBudget.enabled=true` with `minAvailable=1`.
-- `networkPolicy.enabled=true` with explicit ingress/egress policy stanzas.
+- `networkPolicy.enabled=true` with explicit ingress/egress policy stanzas (DNS, HTTPS, NATS, and ClickHouse by default).
 - `envSecrets` supports direct `env` values from secret key references.
 - `autoscaling.customMetrics` enables HPA custom metrics in addition to CPU/memory targets.
 

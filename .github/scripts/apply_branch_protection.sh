@@ -23,6 +23,7 @@ cat >"$payload_file" <<JSON
     "strict": true,
     "contexts": [
       "CI / test",
+      "CI / staticcheck",
       "CI / openapi-contract",
       "CI / docker-build",
       "CI / helm-lint",

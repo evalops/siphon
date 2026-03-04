@@ -13,13 +13,17 @@ func TestSQLiteStateStoreCheckpointAndSnapshotPersistence(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 
-	s.Checkpoints.Set("hubspot", "cp_1")
+	if err := s.Checkpoints.Set("hubspot", "cp_1"); err != nil {
+		t.Fatalf("set checkpoint: %v", err)
+	}
 	cp, ok := s.Checkpoints.Get("hubspot")
 	if !ok || cp != "cp_1" {
 		t.Fatalf("unexpected checkpoint: %q, %v", cp, ok)
 	}
 
-	s.Snapshots.Put("hubspot", "deal", "d1", map[string]any{"stage": "open"})
+	if err := s.Snapshots.Put("hubspot", "deal", "d1", map[string]any{"stage": "open"}); err != nil {
+		t.Fatalf("put snapshot: %v", err)
+	}
 	snap, ok := s.Snapshots.Get("hubspot", "deal", "d1")
 	if !ok || snap["stage"] != "open" {
 		t.Fatalf("unexpected snapshot: %+v, %v", snap, ok)

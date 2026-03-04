@@ -404,3 +404,131 @@ func TestConfigValidateAdminTokenAndReplayRules(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigValidateProviderModesAndCredentials(t *testing.T) {
+	tests := []struct {
+		name       string
+		cfg        Config
+		wantErrSub string
+	}{
+		{
+			name: "webhook provider requires secret",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"stripe": {Mode: "webhook"},
+				},
+			},
+			wantErrSub: "providers.stripe webhook mode requires secret",
+		},
+		{
+			name: "hubspot webhook accepts client secret",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"hubspot": {Mode: "webhook", ClientSecret: "hs-client-secret"},
+				},
+			},
+		},
+		{
+			name: "webhook provider accepts tenant secret override",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"acme": {
+						Mode: "webhook",
+						Tenants: map[string]ProviderTenantConfig{
+							"tenant-a": {Secret: "tenant-secret"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "unsupported poll provider fails fast",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"stripe": {Mode: "poll", AccessToken: "tok", BaseURL: "https://api.example.com"},
+				},
+			},
+			wantErrSub: "providers.stripe poll mode is not supported",
+		},
+		{
+			name: "salesforce poll requires base url",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"salesforce": {Mode: "poll", AccessToken: "tok"},
+				},
+			},
+			wantErrSub: "providers.salesforce poll target base is invalid: base_url is required",
+		},
+		{
+			name: "quickbooks poll requires realm id",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"quickbooks": {Mode: "poll", AccessToken: "tok", BaseURL: "https://quickbooks.api.intuit.com"},
+				},
+			},
+			wantErrSub: "realm_id is required",
+		},
+		{
+			name: "hubspot poll supports tenant-only credentials",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"hubspot": {
+						Mode: "poll",
+						Tenants: map[string]ProviderTenantConfig{
+							"tenant-a": {
+								AccessToken: "tenant-token",
+								BaseURL:     "https://api.hubapi.com",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "hubspot poll validates base target when base credentials present",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"hubspot": {
+						Mode:        "poll",
+						AccessToken: "base-token",
+						Tenants: map[string]ProviderTenantConfig{
+							"tenant-a": {
+								AccessToken: "tenant-token",
+								BaseURL:     "https://api.hubapi.com",
+							},
+						},
+					},
+				},
+			},
+			wantErrSub: "providers.hubspot poll target base is invalid: base_url is required",
+		},
+		{
+			name: "notion poll accepts base secret",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"notion": {Mode: "poll", Secret: "notion-token", BaseURL: "https://api.notion.com"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			cfg.ApplyDefaults()
+			err := cfg.Validate()
+			if tt.wantErrSub == "" {
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected validation error containing %q", tt.wantErrSub)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSub) {
+				t.Fatalf("expected validation error containing %q, got %q", tt.wantErrSub, err.Error())
+			}
+		})
+	}
+}

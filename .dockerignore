@@ -1,0 +1,14 @@
+.git
+.github
+charts
+docs
+bin
+dist
+data
+coverage.out
+*.db
+*.sqlite
+*.sqlite3
+config.yaml
+.env
+.DS_Store

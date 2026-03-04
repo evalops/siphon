@@ -74,7 +74,22 @@ networkPolicy:
         - protocol: TCP
           port: 8080
   egress:
-    - {}
+    # Allow DNS lookups.
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow outbound HTTPS for SaaS poller APIs.
+    - ports:
+        - protocol: TCP
+          port: 443
+    # Allow NATS and ClickHouse service traffic.
+    - ports:
+        - protocol: TCP
+          port: 4222
+        - protocol: TCP
+          port: 9000
 
 nodeSelector: {}
 tolerations: []

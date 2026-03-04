@@ -2,13 +2,15 @@ FROM golang:1.24-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+COPY cmd ./cmd
+COPY config ./config
+COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/tap ./cmd/tap
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /app
 COPY --from=builder /out/tap /app/tap
-COPY config/config.example.yaml /app/config.example.yaml
+COPY config.example.yaml /app/config.example.yaml
 EXPOSE 8080
 ENTRYPOINT ["/app/tap"]
 CMD ["-config", "/app/config.yaml"]

@@ -61,11 +61,15 @@ func TestOpenPollStores(t *testing.T) {
 	if closer != nil {
 		t.Fatalf("memory backend should not return closer")
 	}
-	cp.Set("hubspot", "cp")
+	if err := cp.Set("hubspot", "cp"); err != nil {
+		t.Fatalf("set memory checkpoint: %v", err)
+	}
 	if got, ok := cp.Get("hubspot"); !ok || got != "cp" {
 		t.Fatalf("unexpected memory checkpoint: %q %v", got, ok)
 	}
-	snap.Put("hubspot", "deal", "1", map[string]any{"stage": "open"})
+	if err := snap.Put("hubspot", "deal", "1", map[string]any{"stage": "open"}); err != nil {
+		t.Fatalf("put memory snapshot: %v", err)
+	}
 
 	sqlitePath := filepath.Join(t.TempDir(), "state.db")
 	cp2, _, closer2, err := openPollStores(config.StateConfig{Backend: "sqlite", SQLitePath: sqlitePath})
@@ -73,7 +77,9 @@ func TestOpenPollStores(t *testing.T) {
 		t.Fatalf("open sqlite stores: %v", err)
 	}
 	defer closer2.Close()
-	cp2.Set("hubspot", "cp2")
+	if err := cp2.Set("hubspot", "cp2"); err != nil {
+		t.Fatalf("set sqlite checkpoint: %v", err)
+	}
 	if got, ok := cp2.Get("hubspot"); !ok || got != "cp2" {
 		t.Fatalf("unexpected sqlite checkpoint: %q %v", got, ok)
 	}

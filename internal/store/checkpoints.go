@@ -4,7 +4,7 @@ import "sync"
 
 type CheckpointStore interface {
 	Get(provider string) (string, bool)
-	Set(provider, checkpoint string)
+	Set(provider, checkpoint string) error
 }
 
 type InMemoryCheckpointStore struct {
@@ -23,8 +23,9 @@ func (s *InMemoryCheckpointStore) Get(provider string) (string, bool) {
 	return v, ok
 }
 
-func (s *InMemoryCheckpointStore) Set(provider, checkpoint string) {
+func (s *InMemoryCheckpointStore) Set(provider, checkpoint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[provider] = checkpoint
+	return nil
 }

@@ -6,7 +6,7 @@ import (
 
 type SnapshotStore interface {
 	Get(provider, entityType, entityID string) (map[string]any, bool)
-	Put(provider, entityType, entityID string, snapshot map[string]any)
+	Put(provider, entityType, entityID string, snapshot map[string]any) error
 }
 
 type InMemorySnapshotStore struct {
@@ -36,7 +36,7 @@ func (s *InMemorySnapshotStore) Get(provider, entityType, entityID string) (map[
 	return cpy, true
 }
 
-func (s *InMemorySnapshotStore) Put(provider, entityType, entityID string, snapshot map[string]any) {
+func (s *InMemorySnapshotStore) Put(provider, entityType, entityID string, snapshot map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cpy := make(map[string]any, len(snapshot))
@@ -44,4 +44,5 @@ func (s *InMemorySnapshotStore) Put(provider, entityType, entityID string, snaps
 		cpy[k] = val
 	}
 	s.data[s.key(provider, entityType, entityID)] = cpy
+	return nil
 }

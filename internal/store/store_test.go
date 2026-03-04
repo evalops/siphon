@@ -9,7 +9,9 @@ func TestInMemoryCheckpointStore(t *testing.T) {
 		t.Fatalf("expected no checkpoint initially")
 	}
 
-	s.Set("hubspot", "2026-03-03T14:22:00Z")
+	if err := s.Set("hubspot", "2026-03-03T14:22:00Z"); err != nil {
+		t.Fatalf("set checkpoint: %v", err)
+	}
 	v, ok := s.Get("hubspot")
 	if !ok {
 		t.Fatalf("expected checkpoint to exist")
@@ -23,7 +25,9 @@ func TestInMemorySnapshotStoreReturnsCopy(t *testing.T) {
 	s := NewInMemorySnapshotStore()
 
 	orig := map[string]any{"stage": "open", "amount": 100}
-	s.Put("hubspot", "deal", "d1", orig)
+	if err := s.Put("hubspot", "deal", "d1", orig); err != nil {
+		t.Fatalf("put snapshot: %v", err)
+	}
 
 	got, ok := s.Get("hubspot", "deal", "d1")
 	if !ok {

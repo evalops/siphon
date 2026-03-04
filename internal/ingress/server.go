@@ -88,10 +88,13 @@ func (s *Server) HTTPServer(handler http.Handler) *http.Server {
 	}
 	addr := fmt.Sprintf(":%d", s.cfg.Server.Port)
 	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		ReadTimeout:  s.cfg.Server.ReadTimeout,
-		WriteTimeout: s.cfg.Server.WriteTimeout,
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       s.cfg.Server.ReadTimeout,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      s.cfg.Server.WriteTimeout,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	s.httpServer = httpServer
 	return httpServer

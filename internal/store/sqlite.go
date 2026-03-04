@@ -89,9 +89,13 @@ func (s *SQLiteCheckpointStore) Get(provider string) (string, bool) {
 	return checkpoint, true
 }
 
-func (s *SQLiteCheckpointStore) Set(provider, checkpoint string) {
-	_, _ = s.db.Exec(`INSERT INTO checkpoints(provider, checkpoint) VALUES(?, ?)
+func (s *SQLiteCheckpointStore) Set(provider, checkpoint string) error {
+	_, err := s.db.Exec(`INSERT INTO checkpoints(provider, checkpoint) VALUES(?, ?)
 		ON CONFLICT(provider) DO UPDATE SET checkpoint=excluded.checkpoint`, provider, checkpoint)
+	if err != nil {
+		return fmt.Errorf("upsert checkpoint for provider %q: %w", provider, err)
+	}
+	return nil
 }
 
 func (s *SQLiteSnapshotStore) Get(provider, entityType, entityID string) (map[string]any, bool) {
@@ -107,12 +111,19 @@ func (s *SQLiteSnapshotStore) Get(provider, entityType, entityID string) (map[st
 	return out, true
 }
 
-func (s *SQLiteSnapshotStore) Put(provider, entityType, entityID string, snapshot map[string]any) {
+func (s *SQLiteSnapshotStore) Put(provider, entityType, entityID string, snapshot map[string]any) error {
 	if snapshot == nil {
 		snapshot = map[string]any{}
 	}
-	b, _ := json.Marshal(snapshot)
-	_, _ = s.db.Exec(`INSERT INTO snapshots(provider, entity_type, entity_id, snapshot_json) VALUES(?, ?, ?, ?)
+	b, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot for provider=%q entity_type=%q entity_id=%q: %w", provider, entityType, entityID, err)
+	}
+	_, err = s.db.Exec(`INSERT INTO snapshots(provider, entity_type, entity_id, snapshot_json) VALUES(?, ?, ?, ?)
 		ON CONFLICT(provider, entity_type, entity_id) DO UPDATE SET snapshot_json=excluded.snapshot_json`,
 		provider, entityType, entityID, string(b))
+	if err != nil {
+		return fmt.Errorf("upsert snapshot for provider=%q entity_type=%q entity_id=%q: %w", provider, entityType, entityID, err)
+	}
+	return nil
 }

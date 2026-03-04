@@ -31,15 +31,39 @@ jobs:
         run: go test ./...
 
       - name: Coverage
+        env:
+          MIN_COVERAGE: "75"
         run: |
           go test ./... -coverprofile=coverage.out
           go tool cover -func=coverage.out
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          echo "Total coverage: ${total}% (minimum: ${MIN_COVERAGE}%)"
+          awk -v got="$total" -v min="$MIN_COVERAGE" 'BEGIN { if (got+0 < min+0) { printf("coverage %.1f%% is below minimum %.1f%%\n", got, min); exit 1 } }'
 
       - name: Upload coverage profile
         uses: actions/upload-artifact@v4
         with:
           name: coverage-profile
           path: coverage.out
+
+  staticcheck:
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: go1.24.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
+
+      - name: Run staticcheck
+        run: $(go env GOPATH)/bin/staticcheck ./...
 
   openapi-contract:
     runs-on: ubuntu-latest

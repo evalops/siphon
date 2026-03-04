@@ -13,7 +13,7 @@ import (
 
 type SnapshotStore interface {
 	Get(provider, entityType, entityID string) (map[string]any, bool)
-	Put(provider, entityType, entityID string, snapshot map[string]any)
+	Put(provider, entityType, entityID string, snapshot map[string]any) error
 }
 
 type EventSink interface {
@@ -99,11 +99,15 @@ func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore,
 		if err := sink.Publish(ctx, evt, dedup); err != nil {
 			return fmt.Errorf("publish poll event: %w", err)
 		}
-		snapshots.Put(stateProvider, entity.EntityType, entity.EntityID, entity.Snapshot)
+		if err := snapshots.Put(stateProvider, entity.EntityType, entity.EntityID, entity.Snapshot); err != nil {
+			return fmt.Errorf("store snapshot: %w", err)
+		}
 	}
 
 	if res.NextCheckpoint != "" {
-		checkpoints.Set(stateProvider, res.NextCheckpoint)
+		if err := checkpoints.Set(stateProvider, res.NextCheckpoint); err != nil {
+			return fmt.Errorf("store checkpoint: %w", err)
+		}
 	}
 	return nil
 }
