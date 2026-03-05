@@ -14,6 +14,10 @@ type Metrics struct {
 	EventsPublishedTotal             *prometheus.CounterVec
 	EventPublishFailuresTotal        *prometheus.CounterVec
 	EventsDedupHitsTotal             *prometheus.CounterVec
+	NATSPublishRetriesTotal          *prometheus.CounterVec
+	NATSPublishRetryDelaySeconds     prometheus.Histogram
+	JetStreamAdvisoriesTotal         *prometheus.CounterVec
+	ClickHouseDedupSkippedTotal      prometheus.Counter
 	AdminRequestsTotal               *prometheus.CounterVec
 	AdminRequestDurationSeconds      *prometheus.HistogramVec
 	AdminReplayJobsTotal             *prometheus.CounterVec
@@ -60,6 +64,23 @@ func NewMetrics() *Metrics {
 				Name: "tap_events_dedup_hits_total",
 				Help: "Events deduplicated by NATS in the dedup window.",
 			}, []string{"provider"}),
+			NATSPublishRetriesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "tap_nats_publish_retries_total",
+				Help: "NATS publish retries by retry classification.",
+			}, []string{"reason"}),
+			NATSPublishRetryDelaySeconds: promauto.NewHistogram(prometheus.HistogramOpts{
+				Name:    "tap_nats_publish_retry_delay_seconds",
+				Help:    "Applied retry delay before a NATS publish retry attempt.",
+				Buckets: prometheus.DefBuckets,
+			}),
+			JetStreamAdvisoriesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "tap_jetstream_advisories_total",
+				Help: "JetStream advisory events observed by advisory kind.",
+			}, []string{"kind"}),
+			ClickHouseDedupSkippedTotal: promauto.NewCounter(prometheus.CounterOpts{
+				Name: "tap_clickhouse_dedup_skipped_total",
+				Help: "Rows skipped by ClickHouse sink due to idempotency dedupe checks.",
+			}),
 			AdminRequestsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
 				Name: "tap_admin_requests_total",
 				Help: "Admin endpoint requests by endpoint and outcome.",

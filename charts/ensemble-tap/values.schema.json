@@ -113,6 +113,25 @@
               "enum": ["old", "new"],
               "description": "JetStream discard policy when limits are reached."
             },
+            "stream_max_consumers": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum number of JetStream consumers allowed on this stream (0 uses server default)."
+            },
+            "stream_max_msgs_per_subject": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum retained messages per subject in the JetStream stream (0 means unlimited)."
+            },
+            "stream_compression": {
+              "type": "string",
+              "enum": ["none", "s2"],
+              "description": "JetStream stream file store compression mode."
+            },
+            "stream_allow_msg_ttl": {
+              "type": "boolean",
+              "description": "Allow per-message TTL using Nats-Msg-TTL header on the stream."
+            },
             "stream_max_msgs": {
               "type": "integer",
               "minimum": 0,
@@ -377,6 +396,28 @@
               "type": "integer",
               "minimum": 1,
               "description": "Maximum pending acks for ClickHouse sink consumer."
+            },
+            "consumer_max_deliver": {
+              "type": "integer",
+              "minimum": -1,
+              "description": "Maximum delivery attempts for ClickHouse sink consumer messages (-1 means unlimited, 0 uses server default)."
+            },
+            "consumer_backoff": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional explicit redelivery backoff schedule for ClickHouse sink consumer."
+            },
+            "consumer_max_waiting": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum waiting pull requests allowed on the ClickHouse sink consumer (0 uses server default)."
+            },
+            "consumer_max_request_max_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum bytes returned by one pull request for ClickHouse sink consumer (0 uses server default)."
             },
             "insert_timeout": {
               "type": "string",

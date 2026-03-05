@@ -27,6 +27,7 @@ const (
 	defaultNATSStreamReplicas    = 1
 	defaultNATSStreamStorage     = "file"
 	defaultNATSStreamDiscard     = "old"
+	defaultNATSStreamCompression = "none"
 	defaultClickHouseUser        = "default"
 	defaultClickHouseDialTimeout = 5 * time.Second
 	defaultClickHouseMaxOpen     = 4
@@ -141,36 +142,44 @@ type NATSConfig struct {
 	StreamReplicas       int           `koanf:"stream_replicas"`
 	StreamStorage        string        `koanf:"stream_storage"`
 	StreamDiscard        string        `koanf:"stream_discard"`
+	StreamMaxConsumers   int           `koanf:"stream_max_consumers"`
+	StreamMaxMsgsPerSub  int64         `koanf:"stream_max_msgs_per_subject"`
+	StreamCompression    string        `koanf:"stream_compression"`
+	StreamAllowMsgTTL    bool          `koanf:"stream_allow_msg_ttl"`
 	StreamMaxMsgs        int64         `koanf:"stream_max_msgs"`
 	StreamMaxBytes       int64         `koanf:"stream_max_bytes"`
 	StreamMaxMsgSize     int           `koanf:"stream_max_msg_size"`
 }
 
 type ClickHouseConfig struct {
-	Addr                  string        `koanf:"addr"`
-	Database              string        `koanf:"database"`
-	Table                 string        `koanf:"table"`
-	Username              string        `koanf:"username"`
-	Password              string        `koanf:"password"`
-	Secure                bool          `koanf:"secure"`
-	InsecureSkipVerify    bool          `koanf:"insecure_skip_verify"`
-	TLSServerName         string        `koanf:"tls_server_name"`
-	CAFile                string        `koanf:"ca_file"`
-	CertFile              string        `koanf:"cert_file"`
-	KeyFile               string        `koanf:"key_file"`
-	DialTimeout           time.Duration `koanf:"dial_timeout"`
-	MaxOpenConns          int           `koanf:"max_open_conns"`
-	MaxIdleConns          int           `koanf:"max_idle_conns"`
-	ConnMaxLifetime       time.Duration `koanf:"conn_max_lifetime"`
-	BatchSize             int           `koanf:"batch_size"`
-	FlushInterval         time.Duration `koanf:"flush_interval"`
-	ConsumerName          string        `koanf:"consumer_name"`
-	ConsumerFetchBatch    int           `koanf:"consumer_fetch_batch_size"`
-	ConsumerFetchMaxWait  time.Duration `koanf:"consumer_fetch_max_wait"`
-	ConsumerAckWait       time.Duration `koanf:"consumer_ack_wait"`
-	ConsumerMaxAckPending int           `koanf:"consumer_max_ack_pending"`
-	InsertTimeout         time.Duration `koanf:"insert_timeout"`
-	RetentionTTL          time.Duration `koanf:"retention_ttl"`
+	Addr                       string          `koanf:"addr"`
+	Database                   string          `koanf:"database"`
+	Table                      string          `koanf:"table"`
+	Username                   string          `koanf:"username"`
+	Password                   string          `koanf:"password"`
+	Secure                     bool            `koanf:"secure"`
+	InsecureSkipVerify         bool            `koanf:"insecure_skip_verify"`
+	TLSServerName              string          `koanf:"tls_server_name"`
+	CAFile                     string          `koanf:"ca_file"`
+	CertFile                   string          `koanf:"cert_file"`
+	KeyFile                    string          `koanf:"key_file"`
+	DialTimeout                time.Duration   `koanf:"dial_timeout"`
+	MaxOpenConns               int             `koanf:"max_open_conns"`
+	MaxIdleConns               int             `koanf:"max_idle_conns"`
+	ConnMaxLifetime            time.Duration   `koanf:"conn_max_lifetime"`
+	BatchSize                  int             `koanf:"batch_size"`
+	FlushInterval              time.Duration   `koanf:"flush_interval"`
+	ConsumerName               string          `koanf:"consumer_name"`
+	ConsumerFetchBatch         int             `koanf:"consumer_fetch_batch_size"`
+	ConsumerFetchMaxWait       time.Duration   `koanf:"consumer_fetch_max_wait"`
+	ConsumerAckWait            time.Duration   `koanf:"consumer_ack_wait"`
+	ConsumerMaxAckPending      int             `koanf:"consumer_max_ack_pending"`
+	ConsumerMaxDeliver         int             `koanf:"consumer_max_deliver"`
+	ConsumerBackoff            []time.Duration `koanf:"consumer_backoff"`
+	ConsumerMaxWaiting         int             `koanf:"consumer_max_waiting"`
+	ConsumerMaxRequestMaxBytes int             `koanf:"consumer_max_request_max_bytes"`
+	InsertTimeout              time.Duration   `koanf:"insert_timeout"`
+	RetentionTTL               time.Duration   `koanf:"retention_ttl"`
 }
 
 type ServerConfig struct {
@@ -252,6 +261,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.NATS.StreamDiscard) == "" {
 		c.NATS.StreamDiscard = defaultNATSStreamDiscard
+	}
+	if strings.TrimSpace(c.NATS.StreamCompression) == "" {
+		c.NATS.StreamCompression = defaultNATSStreamCompression
 	}
 	if c.ClickHouse.Database == "" {
 		c.ClickHouse.Database = "ensemble"
@@ -523,6 +535,18 @@ func validateNATSConfig(cfg NATSConfig) error {
 	default:
 		return fmt.Errorf("nats.stream_discard must be one of old|new")
 	}
+	if cfg.StreamMaxConsumers < 0 {
+		return fmt.Errorf("nats.stream_max_consumers must be greater than or equal to 0")
+	}
+	if cfg.StreamMaxMsgsPerSub < 0 {
+		return fmt.Errorf("nats.stream_max_msgs_per_subject must be greater than or equal to 0")
+	}
+	streamCompression := strings.ToLower(strings.TrimSpace(cfg.StreamCompression))
+	switch streamCompression {
+	case "", "none", "s2":
+	default:
+		return fmt.Errorf("nats.stream_compression must be one of none|s2")
+	}
 	if cfg.StreamMaxMsgs < 0 {
 		return fmt.Errorf("nats.stream_max_msgs must be greater than or equal to 0")
 	}
@@ -617,6 +641,30 @@ func validateClickHouseConfig(cfg ClickHouseConfig) error {
 	}
 	if cfg.ConsumerMaxAckPending <= 0 {
 		return fmt.Errorf("clickhouse.consumer_max_ack_pending must be greater than 0")
+	}
+	if cfg.ConsumerMaxDeliver < -1 {
+		return fmt.Errorf("clickhouse.consumer_max_deliver must be greater than or equal to -1")
+	}
+	if cfg.ConsumerMaxWaiting < 0 {
+		return fmt.Errorf("clickhouse.consumer_max_waiting must be greater than or equal to 0")
+	}
+	if cfg.ConsumerMaxRequestMaxBytes < 0 {
+		return fmt.Errorf("clickhouse.consumer_max_request_max_bytes must be greater than or equal to 0")
+	}
+	if len(cfg.ConsumerBackoff) > 0 {
+		prev := time.Duration(0)
+		for i, backoff := range cfg.ConsumerBackoff {
+			if backoff <= 0 {
+				return fmt.Errorf("clickhouse.consumer_backoff[%d] must be greater than 0", i)
+			}
+			if i > 0 && backoff < prev {
+				return fmt.Errorf("clickhouse.consumer_backoff must be non-decreasing")
+			}
+			prev = backoff
+		}
+		if cfg.ConsumerMaxDeliver > 0 && cfg.ConsumerMaxDeliver != len(cfg.ConsumerBackoff) {
+			return fmt.Errorf("clickhouse.consumer_max_deliver must equal len(clickhouse.consumer_backoff) when both are configured")
+		}
 	}
 	if cfg.InsertTimeout <= 0 {
 		return fmt.Errorf("clickhouse.insert_timeout must be greater than 0")

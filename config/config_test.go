@@ -86,6 +86,18 @@ func TestLoadConfigMissingFileAppliesDefaults(t *testing.T) {
 	if cfg.NATS.StreamDiscard != "old" {
 		t.Fatalf("expected default nats stream discard old, got %q", cfg.NATS.StreamDiscard)
 	}
+	if cfg.NATS.StreamMaxConsumers != 0 {
+		t.Fatalf("expected default nats stream max consumers 0, got %d", cfg.NATS.StreamMaxConsumers)
+	}
+	if cfg.NATS.StreamMaxMsgsPerSub != 0 {
+		t.Fatalf("expected default nats stream max msgs per subject 0, got %d", cfg.NATS.StreamMaxMsgsPerSub)
+	}
+	if cfg.NATS.StreamCompression != "none" {
+		t.Fatalf("expected default nats stream compression none, got %q", cfg.NATS.StreamCompression)
+	}
+	if cfg.NATS.StreamAllowMsgTTL {
+		t.Fatalf("expected default nats stream allow msg ttl false")
+	}
 	if cfg.NATS.StreamMaxMsgs != 0 {
 		t.Fatalf("expected default nats stream max msgs 0, got %d", cfg.NATS.StreamMaxMsgs)
 	}
@@ -133,6 +145,18 @@ func TestLoadConfigMissingFileAppliesDefaults(t *testing.T) {
 	}
 	if cfg.ClickHouse.ConsumerMaxAckPending != 1000 {
 		t.Fatalf("expected default clickhouse consumer max ack pending 1000, got %d", cfg.ClickHouse.ConsumerMaxAckPending)
+	}
+	if cfg.ClickHouse.ConsumerMaxDeliver != 0 {
+		t.Fatalf("expected default clickhouse consumer max deliver 0, got %d", cfg.ClickHouse.ConsumerMaxDeliver)
+	}
+	if len(cfg.ClickHouse.ConsumerBackoff) != 0 {
+		t.Fatalf("expected default clickhouse consumer backoff empty, got %#v", cfg.ClickHouse.ConsumerBackoff)
+	}
+	if cfg.ClickHouse.ConsumerMaxWaiting != 0 {
+		t.Fatalf("expected default clickhouse consumer max waiting 0, got %d", cfg.ClickHouse.ConsumerMaxWaiting)
+	}
+	if cfg.ClickHouse.ConsumerMaxRequestMaxBytes != 0 {
+		t.Fatalf("expected default clickhouse consumer max request max bytes 0, got %d", cfg.ClickHouse.ConsumerMaxRequestMaxBytes)
 	}
 	if cfg.ClickHouse.InsertTimeout != 10*time.Second {
 		t.Fatalf("expected default clickhouse insert timeout 10s, got %s", cfg.ClickHouse.InsertTimeout)
@@ -948,6 +972,158 @@ func TestConfigValidateProviderModesAndCredentials(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tt.cfg
 			cfg.ApplyDefaults()
+			err := cfg.Validate()
+			if tt.wantErrSub == "" {
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected validation error containing %q", tt.wantErrSub)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSub) {
+				t.Fatalf("expected validation error containing %q, got %q", tt.wantErrSub, err.Error())
+			}
+		})
+	}
+}
+
+func TestConfigValidateAdvancedNATSAndClickHouseControls(t *testing.T) {
+	baseConfig := func() Config {
+		return Config{
+			NATS: NATSConfig{
+				URL:                 "nats://localhost:4222",
+				Stream:              "ENSEMBLE_TAP",
+				SubjectPrefix:       "ensemble.tap",
+				MaxAge:              24 * time.Hour,
+				DedupWindow:         time.Minute,
+				ConnectTimeout:      5 * time.Second,
+				ReconnectWait:       2 * time.Second,
+				MaxReconnects:       -1,
+				PublishTimeout:      5 * time.Second,
+				PublishMaxRetries:   3,
+				PublishRetryBackoff: 100 * time.Millisecond,
+				StreamReplicas:      1,
+				StreamStorage:       "file",
+				StreamDiscard:       "old",
+				StreamCompression:   "none",
+			},
+			ClickHouse: ClickHouseConfig{
+				Addr:                  "clickhouse:9000",
+				Database:              "ensemble",
+				Table:                 "tap_events",
+				Username:              "default",
+				DialTimeout:           5 * time.Second,
+				MaxOpenConns:          4,
+				MaxIdleConns:          2,
+				BatchSize:             500,
+				FlushInterval:         2 * time.Second,
+				ConsumerName:          "tap_clickhouse_sink",
+				ConsumerFetchBatch:    100,
+				ConsumerFetchMaxWait:  500 * time.Millisecond,
+				ConsumerAckWait:       30 * time.Second,
+				ConsumerMaxAckPending: 1000,
+				InsertTimeout:         10 * time.Second,
+				RetentionTTL:          365 * 24 * time.Hour,
+			},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		mutate     func(*Config)
+		wantErrSub string
+	}{
+		{
+			name: "nats stream max consumers must be non-negative",
+			mutate: func(cfg *Config) {
+				cfg.NATS.StreamMaxConsumers = -1
+			},
+			wantErrSub: "nats.stream_max_consumers",
+		},
+		{
+			name: "nats stream max msgs per subject must be non-negative",
+			mutate: func(cfg *Config) {
+				cfg.NATS.StreamMaxMsgsPerSub = -1
+			},
+			wantErrSub: "nats.stream_max_msgs_per_subject",
+		},
+		{
+			name: "nats stream compression must be supported",
+			mutate: func(cfg *Config) {
+				cfg.NATS.StreamCompression = "gzip"
+			},
+			wantErrSub: "nats.stream_compression",
+		},
+		{
+			name: "clickhouse consumer max deliver must be >= -1",
+			mutate: func(cfg *Config) {
+				cfg.ClickHouse.ConsumerMaxDeliver = -2
+			},
+			wantErrSub: "clickhouse.consumer_max_deliver",
+		},
+		{
+			name: "clickhouse consumer max waiting must be non-negative",
+			mutate: func(cfg *Config) {
+				cfg.ClickHouse.ConsumerMaxWaiting = -1
+			},
+			wantErrSub: "clickhouse.consumer_max_waiting",
+		},
+		{
+			name: "clickhouse consumer max request max bytes must be non-negative",
+			mutate: func(cfg *Config) {
+				cfg.ClickHouse.ConsumerMaxRequestMaxBytes = -1
+			},
+			wantErrSub: "clickhouse.consumer_max_request_max_bytes",
+		},
+		{
+			name: "clickhouse consumer backoff must be positive",
+			mutate: func(cfg *Config) {
+				cfg.ClickHouse.ConsumerBackoff = []time.Duration{100 * time.Millisecond, 0}
+			},
+			wantErrSub: "clickhouse.consumer_backoff[1]",
+		},
+		{
+			name: "clickhouse consumer backoff must be non-decreasing",
+			mutate: func(cfg *Config) {
+				cfg.ClickHouse.ConsumerBackoff = []time.Duration{200 * time.Millisecond, 100 * time.Millisecond}
+			},
+			wantErrSub: "clickhouse.consumer_backoff must be non-decreasing",
+		},
+		{
+			name: "clickhouse max deliver must match backoff length",
+			mutate: func(cfg *Config) {
+				cfg.ClickHouse.ConsumerMaxDeliver = 3
+				cfg.ClickHouse.ConsumerBackoff = []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
+			},
+			wantErrSub: "clickhouse.consumer_max_deliver must equal len(clickhouse.consumer_backoff)",
+		},
+		{
+			name: "valid advanced stream and consumer controls",
+			mutate: func(cfg *Config) {
+				cfg.NATS.StreamMaxConsumers = 64
+				cfg.NATS.StreamMaxMsgsPerSub = 1000
+				cfg.NATS.StreamCompression = "s2"
+				cfg.NATS.StreamAllowMsgTTL = true
+				cfg.ClickHouse.ConsumerMaxDeliver = 3
+				cfg.ClickHouse.ConsumerBackoff = []time.Duration{
+					100 * time.Millisecond,
+					200 * time.Millisecond,
+					400 * time.Millisecond,
+				}
+				cfg.ClickHouse.ConsumerMaxWaiting = 512
+				cfg.ClickHouse.ConsumerMaxRequestMaxBytes = 1048576
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig()
+			tt.mutate(&cfg)
+			cfg.ApplyDefaults()
+
 			err := cfg.Validate()
 			if tt.wantErrSub == "" {
 				if err != nil {

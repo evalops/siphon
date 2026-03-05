@@ -234,7 +234,7 @@ jobs:
         uses: grafana/setup-k6-action@v1
 
       - name: Start NATS
-        run: docker run -d --name tap-nats -p 4222:4222 nats:2.11-alpine -js
+        run: docker run -d --name tap-nats -p 4222:4222 nats:2.12.4-alpine -js
 
       - name: Wait for NATS
         run: |
@@ -308,7 +308,7 @@ jobs:
 
       - name: Start NATS + ClickHouse
         run: |
-          docker run -d --name tap-nats -p 4222:4222 -p 8222:8222 nats:2.11-alpine -js
+          docker run -d --name tap-nats -p 4222:4222 -p 8222:8222 nats:2.12.4-alpine -js
           docker run -d --name tap-clickhouse -p 8123:8123 -p 9000:9000 clickhouse/clickhouse-server:24
 
       - name: Wait for services

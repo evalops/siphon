@@ -25,6 +25,7 @@ type NATSPublisher struct {
 	cfg     config.NATSConfig
 	nc      *nats.Conn
 	js      nats.JetStreamContext
+	advSub  *nats.Subscription
 	metrics *health.Metrics
 	ready   atomic.Bool
 }
@@ -40,6 +41,7 @@ const (
 	defaultNATSReplicas       = 1
 	defaultNATSStreamStorage  = "file"
 	defaultNATSStreamDiscard  = "old"
+	defaultNATSCompression    = "none"
 )
 
 func NewNATSPublisher(ctx context.Context, cfg config.NATSConfig, metrics *health.Metrics) (*NATSPublisher, error) {
@@ -94,6 +96,7 @@ func NewNATSPublisher(ctx context.Context, cfg config.NATSConfig, metrics *healt
 		nc.Close()
 		return nil, err
 	}
+	p.subscribeJetStreamAdvisories()
 	p.ready.Store(true)
 	if metrics != nil {
 		metrics.NATSConnected.Set(1)
@@ -101,17 +104,25 @@ func NewNATSPublisher(ctx context.Context, cfg config.NATSConfig, metrics *healt
 	return p, nil
 }
 
-func (p *NATSPublisher) ensureStream(_ context.Context) error {
+func (p *NATSPublisher) ensureStream(ctx context.Context) error {
 	subjectPattern := strings.TrimSuffix(p.cfg.SubjectPrefix, ".") + ".>"
 	streamCfg := &nats.StreamConfig{
-		Name:       p.cfg.Stream,
-		Subjects:   []string{subjectPattern},
-		Retention:  nats.LimitsPolicy,
-		Discard:    streamDiscardPolicy(p.cfg.StreamDiscard),
-		Storage:    streamStorageType(p.cfg.StreamStorage),
-		MaxAge:     p.cfg.MaxAge,
-		Duplicates: p.cfg.DedupWindow,
-		Replicas:   p.cfg.StreamReplicas,
+		Name:        p.cfg.Stream,
+		Subjects:    []string{subjectPattern},
+		Retention:   nats.LimitsPolicy,
+		Discard:     streamDiscardPolicy(p.cfg.StreamDiscard),
+		Storage:     streamStorageType(p.cfg.StreamStorage),
+		MaxAge:      p.cfg.MaxAge,
+		Duplicates:  p.cfg.DedupWindow,
+		Replicas:    p.cfg.StreamReplicas,
+		Compression: streamCompressionType(p.cfg.StreamCompression),
+		AllowMsgTTL: p.cfg.StreamAllowMsgTTL,
+	}
+	if p.cfg.StreamMaxConsumers > 0 {
+		streamCfg.MaxConsumers = p.cfg.StreamMaxConsumers
+	}
+	if p.cfg.StreamMaxMsgsPerSub > 0 {
+		streamCfg.MaxMsgsPerSubject = p.cfg.StreamMaxMsgsPerSub
 	}
 	if p.cfg.StreamMaxMsgs > 0 {
 		streamCfg.MaxMsgs = p.cfg.StreamMaxMsgs
@@ -126,14 +137,14 @@ func (p *NATSPublisher) ensureStream(_ context.Context) error {
 		streamCfg.MaxMsgSize = int32(p.cfg.StreamMaxMsgSize)
 	}
 
-	if _, err := p.js.AddStream(streamCfg); err == nil {
+	if _, err := p.js.AddStream(streamCfg, nats.Context(ctx)); err == nil {
 		return nil
 	} else {
-		_, infoErr := p.js.StreamInfo(p.cfg.Stream)
+		_, infoErr := p.js.StreamInfo(p.cfg.Stream, nats.Context(ctx))
 		if infoErr != nil {
 			return fmt.Errorf("add stream %s: %w", p.cfg.Stream, err)
 		}
-		if _, err := p.js.UpdateStream(streamCfg); err != nil {
+		if _, err := p.js.UpdateStream(streamCfg, nats.Context(ctx)); err != nil {
 			return fmt.Errorf("update stream %s: %w", p.cfg.Stream, err)
 		}
 	}
@@ -220,12 +231,25 @@ func (p *NATSPublisher) Ready() error {
 	if !p.ready.Load() || !p.nc.IsConnected() {
 		return fmt.Errorf("nats connection not healthy")
 	}
+	timeout := p.cfg.ConnectTimeout
+	if timeout <= 0 || timeout > 2*time.Second {
+		timeout = 2 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if _, err := p.js.AccountInfo(nats.Context(ctx)); err != nil {
+		return fmt.Errorf("jetstream api not healthy: %w", err)
+	}
 	return nil
 }
 
 func (p *NATSPublisher) Close() {
 	if p.nc == nil {
 		return
+	}
+	if p.advSub != nil {
+		_ = p.advSub.Unsubscribe()
+		p.advSub = nil
 	}
 	_ = p.nc.Drain()
 	p.nc.Close()
@@ -326,6 +350,9 @@ func normalizeNATSRuntimeConfig(cfg config.NATSConfig) config.NATSConfig {
 	if strings.TrimSpace(cfg.StreamDiscard) == "" {
 		cfg.StreamDiscard = defaultNATSStreamDiscard
 	}
+	if strings.TrimSpace(cfg.StreamCompression) == "" {
+		cfg.StreamCompression = defaultNATSCompression
+	}
 	return cfg
 }
 
@@ -344,6 +371,15 @@ func streamDiscardPolicy(raw string) nats.DiscardPolicy {
 		return nats.DiscardNew
 	default:
 		return nats.DiscardOld
+	}
+}
+
+func streamCompressionType(raw string) nats.StoreCompression {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "s2":
+		return nats.S2Compression
+	default:
+		return nats.NoCompression
 	}
 }
 
@@ -407,7 +443,13 @@ func (p *NATSPublisher) publishMsgWithRetry(ctx context.Context, msg *nats.Msg) 
 		if attempt == maxAttempts-1 || !shouldRetryNATSPublish(err) {
 			break
 		}
+		if p.metrics != nil {
+			p.metrics.NATSPublishRetriesTotal.WithLabelValues(publishRetryReason(err)).Inc()
+		}
 		delay := backoff.ExponentialDelay(attempt, p.cfg.PublishRetryBackoff, 2*time.Second)
+		if p.metrics != nil {
+			p.metrics.NATSPublishRetryDelaySeconds.Observe(delay.Seconds())
+		}
 		if !backoff.SleepContext(ctx, delay) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
@@ -430,4 +472,55 @@ func shouldRetryNATSPublish(err error) bool {
 		return apiErr.Code >= 500
 	}
 	return true
+}
+
+func publishRetryReason(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "context"
+	}
+	var apiErr *nats.APIError
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.Code >= 500:
+			return "api_5xx"
+		case apiErr.Code >= 400:
+			return "api_4xx"
+		default:
+			return "api_other"
+		}
+	}
+	return "transport"
+}
+
+func (p *NATSPublisher) subscribeJetStreamAdvisories() {
+	if p.nc == nil || p.metrics == nil {
+		return
+	}
+	sub, err := p.nc.Subscribe("$JS.EVENT.ADVISORY.>", func(msg *nats.Msg) {
+		kind := advisoryKindFromSubject(msg.Subject)
+		p.metrics.JetStreamAdvisoriesTotal.WithLabelValues(kind).Inc()
+	})
+	if err != nil {
+		return
+	}
+	p.advSub = sub
+}
+
+func advisoryKindFromSubject(subject string) string {
+	parts := strings.Split(strings.TrimSpace(subject), ".")
+	if len(parts) < 5 {
+		return "unknown"
+	}
+	primary := strings.ToLower(strings.TrimSpace(parts[3]))
+	secondary := strings.ToLower(strings.TrimSpace(parts[4]))
+	if primary == "" {
+		return "unknown"
+	}
+	if secondary == "" {
+		return primary
+	}
+	return primary + "." + secondary
 }

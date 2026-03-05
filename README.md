@@ -71,12 +71,17 @@ make ci-local
 - `nats.username/password`, `nats.token`, and `nats.creds_file` are mutually exclusive auth modes.
 - `nats.secure`, `nats.insecure_skip_verify`, `nats.ca_file`, `nats.cert_file`, and `nats.key_file` tune NATS TLS and optional mTLS.
 - `nats.stream_replicas`, `nats.stream_storage` (`file|memory`), and `nats.stream_discard` (`old|new`) tune JetStream durability and pressure behavior.
+- `nats.stream_max_consumers` and `nats.stream_max_msgs_per_subject` cap consumer and per-subject cardinality at stream level (`0` keeps JetStream defaults/unlimited behavior).
+- `nats.stream_compression` (`none|s2`) and `nats.stream_allow_msg_ttl` control JetStream storage compression and message TTL support.
 - `nats.stream_max_msgs`, `nats.stream_max_bytes`, and `nats.stream_max_msg_size` apply stream-level retention and message-size limits.
 - `clickhouse.username`/`clickhouse.password`, `clickhouse.secure`, and `clickhouse.insecure_skip_verify` tune ClickHouse auth/TLS.
 - `clickhouse.tls_server_name`, `clickhouse.ca_file`, `clickhouse.cert_file`, and `clickhouse.key_file` support ClickHouse TLS verification and optional mTLS.
 - `clickhouse.max_open_conns`, `clickhouse.max_idle_conns`, and `clickhouse.conn_max_lifetime` tune connection pool behavior.
 - `clickhouse.consumer_name`, `clickhouse.consumer_fetch_batch_size`, `clickhouse.consumer_fetch_max_wait`, `clickhouse.consumer_ack_wait`, `clickhouse.consumer_max_ack_pending`, and `clickhouse.insert_timeout` tune sink throughput and ack latency.
+- `clickhouse.consumer_max_deliver`, `clickhouse.consumer_backoff`, `clickhouse.consumer_max_waiting`, and `clickhouse.consumer_max_request_max_bytes` tune pull-consumer redelivery, retry timing, and pull pressure limits.
 - `clickhouse.retention_ttl` controls MergeTree TTL for event-time retention at table level.
+- ClickHouse sink de-duplicates within each batch and skips IDs already present in ClickHouse before insert; skipped rows are exposed via `tap_clickhouse_dedup_skipped_total`.
+- NATS publish retries and JetStream advisories are exposed via `tap_nats_publish_retries_total{reason}`, `tap_nats_publish_retry_delay_seconds`, and `tap_jetstream_advisories_total{kind}`.
 
 ## Admin Endpoints
 

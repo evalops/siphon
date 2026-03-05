@@ -94,6 +94,10 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --set config.nats.stream_replicas=3 \
   --set config.nats.stream_storage=file \
   --set config.nats.stream_discard=old \
+  --set config.nats.stream_max_consumers=256 \
+  --set config.nats.stream_max_msgs_per_subject=500000 \
+  --set config.nats.stream_compression=s2 \
+  --set config.nats.stream_allow_msg_ttl=true \
   --set config.nats.stream_max_msgs=5000000 \
   --set config.nats.stream_max_bytes=21474836480 \
   --set config.nats.stream_max_msg_size=1048576 \
@@ -114,6 +118,13 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --set config.clickhouse.consumer_fetch_max_wait=750ms \
   --set config.clickhouse.consumer_ack_wait=45s \
   --set config.clickhouse.consumer_max_ack_pending=2000 \
+  --set config.clickhouse.consumer_max_deliver=4 \
+  --set config.clickhouse.consumer_backoff[0]=250ms \
+  --set config.clickhouse.consumer_backoff[1]=500ms \
+  --set config.clickhouse.consumer_backoff[2]=1s \
+  --set config.clickhouse.consumer_backoff[3]=2s \
+  --set config.clickhouse.consumer_max_waiting=1024 \
+  --set config.clickhouse.consumer_max_request_max_bytes=2097152 \
   --set config.clickhouse.insert_timeout=15s \
   --set config.clickhouse.retention_ttl=2160h \
   --set extraVolumes[0].name=tap-transport-secrets \
@@ -128,6 +139,8 @@ Auth notes:
 - If NATS TLS files are used (`ca_file`, `cert_file`, `key_file`), set `config.nats.secure=true` and mount files via `extraVolumes` + `extraVolumeMounts`.
 - If ClickHouse TLS files are used (`ca_file`, `cert_file`, `key_file`), set `config.clickhouse.secure=true`; `cert_file` and `key_file` must be set together.
 - If `config.clickhouse.insecure_skip_verify=true`, `config.clickhouse.secure` must also be `true`.
+- `config.nats.stream_compression` supports `none|s2`; `config.nats.stream_max_consumers` and `config.nats.stream_max_msgs_per_subject` must be `>= 0`.
+- `config.clickhouse.consumer_backoff` values must be positive and non-decreasing; when `config.clickhouse.consumer_max_deliver > 0`, it must equal the backoff list length.
 
 ## Ops hardening defaults
 

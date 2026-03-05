@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/evalops/ensemble-tap/config"
+	"github.com/evalops/ensemble-tap/internal/health"
 	"github.com/evalops/ensemble-tap/internal/normalize"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestNATSPublisherPublishesAndDeduplicates(t *testing.T) {
@@ -374,4 +376,136 @@ func TestShouldRetryNATSPublish(t *testing.T) {
 	if !shouldRetryNATSPublish(&nats.APIError{Code: 503}) {
 		t.Fatalf("expected 5xx API error to be retryable")
 	}
+}
+
+func TestStreamCompressionTypeMapping(t *testing.T) {
+	if got := streamCompressionType("s2"); got != nats.S2Compression {
+		t.Fatalf("expected s2 compression mapping, got %v", got)
+	}
+	if got := streamCompressionType("none"); got != nats.NoCompression {
+		t.Fatalf("expected none compression mapping, got %v", got)
+	}
+	if got := streamCompressionType("unknown"); got != nats.NoCompression {
+		t.Fatalf("expected default no compression mapping, got %v", got)
+	}
+}
+
+func TestPublishRetryReason(t *testing.T) {
+	if got := publishRetryReason(nil); got != "unknown" {
+		t.Fatalf("expected unknown for nil error, got %q", got)
+	}
+	if got := publishRetryReason(context.Canceled); got != "context" {
+		t.Fatalf("expected context classification, got %q", got)
+	}
+	if got := publishRetryReason(context.DeadlineExceeded); got != "context" {
+		t.Fatalf("expected context classification, got %q", got)
+	}
+	if got := publishRetryReason(&nats.APIError{Code: 503}); got != "api_5xx" {
+		t.Fatalf("expected api_5xx classification, got %q", got)
+	}
+	if got := publishRetryReason(&nats.APIError{Code: 404}); got != "api_4xx" {
+		t.Fatalf("expected api_4xx classification, got %q", got)
+	}
+	if got := publishRetryReason(&nats.APIError{Code: 302}); got != "api_other" {
+		t.Fatalf("expected api_other classification, got %q", got)
+	}
+	if got := publishRetryReason(errors.New("transport failure")); got != "transport" {
+		t.Fatalf("expected transport classification, got %q", got)
+	}
+}
+
+func TestAdvisoryKindFromSubject(t *testing.T) {
+	if got := advisoryKindFromSubject("$JS.EVENT.ADVISORY.CONSUMER.CREATED.ENSEMBLE_TAP"); got != "consumer.created" {
+		t.Fatalf("expected advisory kind consumer.created, got %q", got)
+	}
+	if got := advisoryKindFromSubject("$JS.EVENT.ADVISORY.STREAM..ENSEMBLE_TAP"); got != "stream" {
+		t.Fatalf("expected advisory kind stream, got %q", got)
+	}
+	if got := advisoryKindFromSubject("invalid"); got != "unknown" {
+		t.Fatalf("expected advisory kind unknown for malformed subject, got %q", got)
+	}
+}
+
+func TestSubscribeJetStreamAdvisoriesIncrementsMetric(t *testing.T) {
+	s := runNATSServer(t)
+	nc, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatalf("connect nats: %v", err)
+	}
+	defer nc.Close()
+
+	metrics := health.NewMetrics()
+	pub := &NATSPublisher{nc: nc, metrics: metrics}
+	before := testutil.ToFloat64(metrics.JetStreamAdvisoriesTotal.WithLabelValues("consumer.created"))
+
+	pub.subscribeJetStreamAdvisories()
+	if pub.advSub == nil {
+		t.Fatalf("expected advisory subscription to be created")
+	}
+	defer pub.Close()
+
+	if err := nc.Publish("$JS.EVENT.ADVISORY.CONSUMER.CREATED.ENSEMBLE_TAP", []byte("{}")); err != nil {
+		t.Fatalf("publish advisory message: %v", err)
+	}
+	if err := nc.FlushTimeout(2 * time.Second); err != nil {
+		t.Fatalf("flush advisory message: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		after := testutil.ToFloat64(metrics.JetStreamAdvisoriesTotal.WithLabelValues("consumer.created"))
+		if after > before {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected advisory metric to increment for consumer.created")
+}
+
+func TestPublishMsgWithRetryReturnsErrorWhenNoStreamMatchesSubject(t *testing.T) {
+	s := runNATSServer(t)
+	nc, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatalf("connect nats: %v", err)
+	}
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("jetstream context: %v", err)
+	}
+	metrics := health.NewMetrics()
+	pub := &NATSPublisher{
+		cfg: config.NATSConfig{
+			PublishMaxRetries:   3,
+			PublishRetryBackoff: 10 * time.Millisecond,
+		},
+		nc:      nc,
+		js:      js,
+		metrics: metrics,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err = pub.publishMsgWithRetry(ctx, &nats.Msg{Subject: "ensemble.tap.unmatched.subject", Data: []byte("payload")})
+	if err == nil {
+		t.Fatalf("expected publish error when no stream matches subject")
+	}
+	nc.Close()
+}
+
+func TestWaitForClosed(t *testing.T) {
+	s := runNATSServer(t)
+	nc, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatalf("connect nats: %v", err)
+	}
+
+	pub := &NATSPublisher{nc: nc}
+	start := time.Now()
+	pub.WaitForClosed(40 * time.Millisecond)
+	if waited := time.Since(start); waited < 30*time.Millisecond {
+		t.Fatalf("expected wait loop to honor timeout for open connection, waited %s", waited)
+	}
+
+	nc.Close()
+	pub.WaitForClosed(0)
 }

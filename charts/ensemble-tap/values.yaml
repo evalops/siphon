@@ -156,6 +156,10 @@ config:
     stream_replicas: 1
     stream_storage: file
     stream_discard: old
+    stream_max_consumers: 0
+    stream_max_msgs_per_subject: 0
+    stream_compression: none
+    stream_allow_msg_ttl: false
     stream_max_msgs: 0
     stream_max_bytes: 0
     stream_max_msg_size: 0
@@ -182,6 +186,10 @@ config:
     consumer_fetch_max_wait: 500ms
     consumer_ack_wait: 30s
     consumer_max_ack_pending: 1000
+    consumer_max_deliver: 0
+    consumer_backoff: []
+    consumer_max_waiting: 0
+    consumer_max_request_max_bytes: 0
     insert_timeout: 10s
     retention_ttl: 8760h
   server:

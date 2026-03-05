@@ -2,8 +2,10 @@ package publish
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -150,14 +152,25 @@ func (s *ClickHouseSink) Start(ctx context.Context) error {
 	s.cfg = normalizeClickHouseRuntimeConfig(s.cfg)
 
 	subject := strings.TrimSuffix(s.natsCfg.SubjectPrefix, ".") + ".>"
-	sub, err := s.js.PullSubscribe(
-		subject,
-		s.cfg.ConsumerName,
+	subOpts := []nats.SubOpt{
 		nats.BindStream(s.natsCfg.Stream),
 		nats.ManualAck(),
 		nats.AckWait(s.cfg.ConsumerAckWait),
 		nats.MaxAckPending(s.cfg.ConsumerMaxAckPending),
-	)
+	}
+	if s.cfg.ConsumerMaxDeliver != 0 {
+		subOpts = append(subOpts, nats.MaxDeliver(s.cfg.ConsumerMaxDeliver))
+	}
+	if len(s.cfg.ConsumerBackoff) > 0 {
+		subOpts = append(subOpts, nats.BackOff(s.cfg.ConsumerBackoff))
+	}
+	if s.cfg.ConsumerMaxWaiting > 0 {
+		subOpts = append(subOpts, nats.PullMaxWaiting(s.cfg.ConsumerMaxWaiting))
+	}
+	if s.cfg.ConsumerMaxRequestMaxBytes > 0 {
+		subOpts = append(subOpts, nats.MaxRequestMaxBytes(s.cfg.ConsumerMaxRequestMaxBytes))
+	}
+	sub, err := s.js.PullSubscribe(subject, s.cfg.ConsumerName, subOpts...)
 	if err != nil {
 		return fmt.Errorf("create pull subscription for clickhouse sink: %w", err)
 	}
@@ -184,7 +197,13 @@ func (s *ClickHouseSink) consumeLoop(ctx context.Context, sub *nats.Subscription
 			return
 		}
 		batchCtx, cancel := context.WithTimeout(ctx, s.cfg.InsertTimeout)
-		err := s.insertRows(batchCtx, rows)
+		filteredRows, skipped, err := s.filterDuplicateRows(batchCtx, rows)
+		if skipped > 0 && s.metrics != nil {
+			s.metrics.ClickHouseDedupSkippedTotal.Add(float64(skipped))
+		}
+		if err == nil && len(filteredRows) > 0 {
+			err = s.insertRows(batchCtx, filteredRows)
+		}
 		cancel()
 		if err != nil {
 			if s.metrics != nil {
@@ -311,9 +330,16 @@ func eventToRow(payload []byte) (clickhouseRow, error) {
 	if when.IsZero() {
 		when = time.Now().UTC()
 	}
+	id := strings.TrimSpace(ce.ID())
+	if id == "" {
+		id = strings.TrimSpace(data.ProviderEventID)
+	}
+	if id == "" {
+		id = fallbackEventIDFromPayload(payload)
+	}
 
 	return clickhouseRow{
-		ID:              ce.ID(),
+		ID:              id,
 		Type:            ce.Type(),
 		Source:          ce.Source(),
 		Subject:         ce.Subject(),
@@ -397,6 +423,15 @@ func normalizeClickHouseRuntimeConfig(cfg config.ClickHouseConfig) config.ClickH
 	if cfg.ConsumerMaxAckPending <= 0 {
 		cfg.ConsumerMaxAckPending = defaultClickHouseAckPending
 	}
+	if len(cfg.ConsumerBackoff) > 0 && cfg.ConsumerMaxDeliver == 0 {
+		cfg.ConsumerMaxDeliver = len(cfg.ConsumerBackoff)
+	}
+	if cfg.ConsumerMaxWaiting < 0 {
+		cfg.ConsumerMaxWaiting = 0
+	}
+	if cfg.ConsumerMaxRequestMaxBytes < 0 {
+		cfg.ConsumerMaxRequestMaxBytes = 0
+	}
 	if cfg.InsertTimeout <= 0 {
 		cfg.InsertTimeout = defaultClickHouseInsertTO
 	}
@@ -453,4 +488,127 @@ func clickHouseTLSConfig(cfg config.ClickHouseConfig) (*tls.Config, error) {
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 	return tlsCfg, nil
+}
+
+func (s *ClickHouseSink) filterDuplicateRows(ctx context.Context, rows []clickhouseRow) ([]clickhouseRow, int, error) {
+	if len(rows) == 0 {
+		return nil, 0, nil
+	}
+
+	seenInBatch := make(map[string]struct{}, len(rows))
+	filtered := make([]clickhouseRow, 0, len(rows))
+	keys := make([]string, 0, len(rows))
+	skipped := 0
+	for _, row := range rows {
+		key := strings.TrimSpace(row.ID)
+		if key == "" {
+			filtered = append(filtered, row)
+			continue
+		}
+		if _, exists := seenInBatch[key]; exists {
+			skipped++
+			continue
+		}
+		seenInBatch[key] = struct{}{}
+		keys = append(keys, key)
+		filtered = append(filtered, row)
+	}
+
+	if s.conn == nil || len(keys) == 0 {
+		return filtered, skipped, nil
+	}
+
+	existingKeys, err := s.loadExistingRowIDs(ctx, keys)
+	if err != nil {
+		return nil, skipped, err
+	}
+	if len(existingKeys) == 0 {
+		return filtered, skipped, nil
+	}
+
+	deduped := make([]clickhouseRow, 0, len(filtered))
+	for _, row := range filtered {
+		key := strings.TrimSpace(row.ID)
+		if key != "" {
+			if _, exists := existingKeys[key]; exists {
+				skipped++
+				continue
+			}
+		}
+		deduped = append(deduped, row)
+	}
+	return deduped, skipped, nil
+}
+
+func (s *ClickHouseSink) loadExistingRowIDs(ctx context.Context, ids []string) (map[string]struct{}, error) {
+	existing := make(map[string]struct{})
+	for _, chunk := range chunkStrings(ids, 200) {
+		if len(chunk) == 0 {
+			continue
+		}
+		query := fmt.Sprintf(
+			"SELECT id FROM %s.%s WHERE id IN (%s)",
+			s.cfg.Database,
+			s.cfg.Table,
+			quotedStringList(chunk),
+		)
+		rows, err := s.conn.Query(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("query existing clickhouse ids: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan existing clickhouse id: %w", err)
+			}
+			id = strings.TrimSpace(id)
+			if id != "" {
+				existing[id] = struct{}{}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("iterate existing clickhouse ids: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("close existing clickhouse id rows: %w", err)
+		}
+	}
+	return existing, nil
+}
+
+func quotedStringList(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		v := strings.TrimSpace(value)
+		if v == "" {
+			continue
+		}
+		quoted = append(quoted, "'"+strings.ReplaceAll(v, "'", "''")+"'")
+	}
+	if len(quoted) == 0 {
+		return "''"
+	}
+	return strings.Join(quoted, ",")
+}
+
+func chunkStrings(values []string, chunkSize int) [][]string {
+	if chunkSize <= 0 || len(values) == 0 {
+		return nil
+	}
+	chunks := make([][]string, 0, (len(values)+chunkSize-1)/chunkSize)
+	for start := 0; start < len(values); start += chunkSize {
+		end := start + chunkSize
+		if end > len(values) {
+			end = len(values)
+		}
+		chunks = append(chunks, values[start:end])
+	}
+	return chunks
+}
+
+func fallbackEventIDFromPayload(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "evt_" + hex.EncodeToString(sum[:])
 }
