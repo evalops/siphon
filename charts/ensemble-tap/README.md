@@ -8,6 +8,14 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --create-namespace
 ```
 
+Pin by digest (recommended for production rollouts):
+
+```bash
+helm upgrade --install ensemble-tap ./charts/ensemble-tap \
+  --namespace ensemble \
+  --set image.digest=sha256:<image-digest>
+```
+
 For the fastest setup path (prompted provider secret + Helm install + signed webhook smoke test), run:
 
 ```bash
@@ -85,8 +93,10 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --namespace ensemble \
   --set env[0].name=NATS_URL \
   --set env[0].value='nats://nats-a:4222,nats-b:4222' \
-  --set env[1].name=CLICKHOUSE_PASSWORD \
-  --set env[1].value='super-secret' \
+  --set env[1].name=CLICKHOUSE_USERNAME \
+  --set env[1].value='ensemble_tap_ingest' \
+  --set env[2].name=CLICKHOUSE_PASSWORD \
+  --set env[2].value='super-secret' \
   --set config.nats.url='${NATS_URL}' \
   --set config.nats.connect_timeout=5s \
   --set config.nats.reconnect_wait=2s \
@@ -108,7 +118,7 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --set config.nats.stream_max_bytes=21474836480 \
   --set config.nats.stream_max_msg_size=1048576 \
   --set config.clickhouse.addr='clickhouse-a:9000,clickhouse-b:9000' \
-  --set config.clickhouse.username=default \
+  --set config.clickhouse.username='${CLICKHOUSE_USERNAME}' \
   --set config.clickhouse.password='${CLICKHOUSE_PASSWORD}' \
   --set config.clickhouse.secure=true \
   --set config.clickhouse.tls_server_name=clickhouse.internal \
@@ -145,13 +155,18 @@ Auth notes:
 - If NATS TLS files are used (`ca_file`, `cert_file`, `key_file`), set `config.nats.secure=true` and mount files via `extraVolumes` + `extraVolumeMounts`.
 - If ClickHouse TLS files are used (`ca_file`, `cert_file`, `key_file`), set `config.clickhouse.secure=true`; `cert_file` and `key_file` must be set together.
 - If `config.clickhouse.insecure_skip_verify=true`, `config.clickhouse.secure` must also be `true`.
+- Chart default sets `config.clickhouse.addr=""` (sink disabled) for easier first install; set `config.clickhouse.addr` to enable sink mode.
 - `config.nats.stream_compression` supports `none|s2`; `config.nats.stream_max_consumers` and `config.nats.stream_max_msgs_per_subject` must be `>= 0`.
 - `config.clickhouse.consumer_backoff` values must be positive and non-decreasing; when `config.clickhouse.consumer_max_deliver > 0`, it must equal the backoff list length.
+- Keep `config.clickhouse.consumer_fetch_max_wait < config.clickhouse.consumer_ack_wait` and `config.clickhouse.insert_timeout + config.clickhouse.flush_interval < config.clickhouse.consumer_ack_wait`.
 
 ## Ops hardening defaults
 
 - `podDisruptionBudget.enabled=true` with `minAvailable=1`.
-- `networkPolicy.enabled=true` with explicit ingress/egress policy stanzas (DNS, HTTPS, NATS, and ClickHouse by default).
+- `serviceAccount.automount=false` to avoid mounting API tokens unless explicitly needed.
+- `networkPolicy.enabled=true` with explicit ingress/egress policy stanzas (DNS + HTTPS defaults).
+- `networkPolicy.allowConfigPorts=true` auto-derives NATS/ClickHouse TCP egress ports from `config.nats.url` and `config.clickhouse.addr`.
+- `networkPolicy.extraEgressPorts=[]` allows additive egress TCP ports without rewriting policy blocks.
 - `envSecrets` supports direct `env` values from secret key references.
 - `autoscaling.customMetrics` enables HPA custom metrics in addition to CPU/memory targets.
 

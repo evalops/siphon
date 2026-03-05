@@ -618,6 +618,39 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			wantErrSub: "nats.creds_file",
 		},
 		{
+			name: "nats url rejects unsupported scheme",
+			cfg: Config{
+				NATS: NATSConfig{
+					URL:           "http://localhost:4222",
+					Stream:        "ENSEMBLE_TAP",
+					SubjectPrefix: "ensemble.tap",
+				},
+			},
+			wantErrSub: "unsupported scheme",
+		},
+		{
+			name: "nats url rejects empty endpoint entries",
+			cfg: Config{
+				NATS: NATSConfig{
+					URL:           "nats://localhost:4222,",
+					Stream:        "ENSEMBLE_TAP",
+					SubjectPrefix: "ensemble.tap",
+				},
+			},
+			wantErrSub: "contains empty endpoint",
+		},
+		{
+			name: "nats url rejects invalid endpoint ports",
+			cfg: Config{
+				NATS: NATSConfig{
+					URL:           "nats://localhost:70000",
+					Stream:        "ENSEMBLE_TAP",
+					SubjectPrefix: "ensemble.tap",
+				},
+			},
+			wantErrSub: "invalid port",
+		},
+		{
 			name: "nats insecure skip verify requires secure",
 			cfg: Config{
 				NATS: NATSConfig{
@@ -730,6 +763,20 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			wantErrSub: "clickhouse.addr",
 		},
 		{
+			name: "clickhouse addr rejects out-of-range port",
+			cfg: Config{
+				NATS: NATSConfig{
+					URL:           "nats://localhost:4222",
+					Stream:        "ENSEMBLE_TAP",
+					SubjectPrefix: "ensemble.tap",
+				},
+				ClickHouse: ClickHouseConfig{
+					Addr: "clickhouse:70000",
+				},
+			},
+			wantErrSub: "invalid port",
+		},
+		{
 			name: "clickhouse insert timeout must be less than ack wait",
 			cfg: Config{
 				NATS: NATSConfig{
@@ -757,6 +804,55 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 				},
 			},
 			wantErrSub: "clickhouse.insert_timeout",
+		},
+		{
+			name: "clickhouse fetch max wait must be less than ack wait",
+			cfg: Config{
+				NATS: NATSConfig{
+					URL:           "nats://localhost:4222",
+					Stream:        "ENSEMBLE_TAP",
+					SubjectPrefix: "ensemble.tap",
+				},
+				ClickHouse: ClickHouseConfig{
+					Addr:                 "clickhouse:9000",
+					ConsumerFetchMaxWait: 30 * time.Second,
+					ConsumerAckWait:      30 * time.Second,
+				},
+			},
+			wantErrSub: "clickhouse.consumer_fetch_max_wait",
+		},
+		{
+			name: "clickhouse flush interval must be less than ack wait",
+			cfg: Config{
+				NATS: NATSConfig{
+					URL:           "nats://localhost:4222",
+					Stream:        "ENSEMBLE_TAP",
+					SubjectPrefix: "ensemble.tap",
+				},
+				ClickHouse: ClickHouseConfig{
+					Addr:            "clickhouse:9000",
+					FlushInterval:   30 * time.Second,
+					ConsumerAckWait: 30 * time.Second,
+				},
+			},
+			wantErrSub: "clickhouse.flush_interval",
+		},
+		{
+			name: "clickhouse insert and flush combined must fit under ack wait",
+			cfg: Config{
+				NATS: NATSConfig{
+					URL:           "nats://localhost:4222",
+					Stream:        "ENSEMBLE_TAP",
+					SubjectPrefix: "ensemble.tap",
+				},
+				ClickHouse: ClickHouseConfig{
+					Addr:            "clickhouse:9000",
+					InsertTimeout:   20 * time.Second,
+					FlushInterval:   15 * time.Second,
+					ConsumerAckWait: 30 * time.Second,
+				},
+			},
+			wantErrSub: "insert_timeout + clickhouse.flush_interval",
 		},
 		{
 			name: "clickhouse consumer name cannot contain whitespace",

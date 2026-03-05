@@ -62,6 +62,7 @@ Use the guided bootstrap script to get from install to first accepted event with
 What it does:
 
 - prompts for provider + webhook secret,
+- optionally wires ClickHouse username/password secrets for sink mode,
 - generates `values.onboarding.yaml`,
 - creates/updates a Kubernetes Secret with webhook credentials,
 - installs/upgrades the Helm release with `--wait`,
@@ -88,6 +89,7 @@ make ci-local
 
 ## NATS + ClickHouse Tuning
 
+- `nats.url` accepts a comma-separated endpoint list; each endpoint must use `nats|tls|ws|wss` and a valid host (and optional valid port).
 - `nats.connect_timeout`, `nats.reconnect_wait`, `nats.max_reconnects`, and `nats.publish_timeout` tune connection and publish behavior.
 - `nats.publish_max_retries` and `nats.publish_retry_backoff` tune publish retry resilience for transient JetStream errors.
 - `nats.username/password`, `nats.token`, and `nats.creds_file` are mutually exclusive auth modes.
@@ -101,6 +103,8 @@ make ci-local
 - `clickhouse.max_open_conns`, `clickhouse.max_idle_conns`, and `clickhouse.conn_max_lifetime` tune connection pool behavior.
 - `clickhouse.consumer_name`, `clickhouse.consumer_fetch_batch_size`, `clickhouse.consumer_fetch_max_wait`, `clickhouse.consumer_ack_wait`, `clickhouse.consumer_max_ack_pending`, and `clickhouse.insert_timeout` tune sink throughput and ack latency.
 - `clickhouse.consumer_max_deliver`, `clickhouse.consumer_backoff`, `clickhouse.consumer_max_waiting`, and `clickhouse.consumer_max_request_max_bytes` tune pull-consumer redelivery, retry timing, and pull pressure limits.
+- `clickhouse.addr` entries must be valid `host:port` values with ports in `1..65535`.
+- To reduce redelivery churn, keep `clickhouse.consumer_fetch_max_wait < clickhouse.consumer_ack_wait` and `clickhouse.insert_timeout + clickhouse.flush_interval < clickhouse.consumer_ack_wait`.
 - `clickhouse.retention_ttl` controls MergeTree TTL for event-time retention at table level.
 - ClickHouse sink de-duplicates within each batch and skips IDs already present in ClickHouse before insert; skipped rows are exposed via `tap_clickhouse_dedup_skipped_total`.
 - NATS publish retries and JetStream advisories are exposed via `tap_nats_publish_retries_total{reason}`, `tap_nats_publish_retry_delay_seconds`, and `tap_jetstream_advisories_total{kind}`.
@@ -210,6 +214,11 @@ helm upgrade --install ensemble-tap ./charts/ensemble-tap \
   --namespace ensemble \
   --create-namespace
 ```
+
+Notes:
+- Chart default keeps ClickHouse sink disabled (`config.clickhouse.addr: ""`) for simpler initial onboarding.
+- NetworkPolicy automatically allows NATS/ClickHouse TCP egress ports derived from chart config (`networkPolicy.allowConfigPorts=true`).
+- Image pinning by digest is supported via `image.digest` (uses `repository@sha256:...`).
 
 See chart-specific usage in `charts/ensemble-tap/README.md`.
 

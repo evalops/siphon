@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -449,8 +451,41 @@ func (c Config) Validate() error {
 }
 
 func validateNATSConfig(cfg NATSConfig) error {
-	if strings.TrimSpace(cfg.URL) == "" {
+	rawURL := strings.TrimSpace(cfg.URL)
+	if rawURL == "" {
 		return fmt.Errorf("nats.url must not be empty")
+	}
+	natsEndpoints := strings.Split(rawURL, ",")
+	for i, endpointRaw := range natsEndpoints {
+		endpoint := strings.TrimSpace(endpointRaw)
+		if endpoint == "" {
+			return fmt.Errorf("nats.url contains empty endpoint at index %d", i)
+		}
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return fmt.Errorf("nats.url endpoint %q is invalid: %w", endpoint, err)
+		}
+		scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+		switch scheme {
+		case "nats", "tls", "ws", "wss":
+		default:
+			return fmt.Errorf("nats.url endpoint %q has unsupported scheme %q (expected one of nats|tls|ws|wss)", endpoint, scheme)
+		}
+		host := strings.TrimSpace(u.Hostname())
+		if host == "" {
+			return fmt.Errorf("nats.url endpoint %q must include a host", endpoint)
+		}
+		if scheme == "nats" || scheme == "tls" {
+			if path := strings.TrimSpace(u.EscapedPath()); path != "" && path != "/" {
+				return fmt.Errorf("nats.url endpoint %q must not include a path for %s scheme", endpoint, scheme)
+			}
+		}
+		port := strings.TrimSpace(u.Port())
+		if port != "" {
+			if err := validatePortNumber(port); err != nil {
+				return fmt.Errorf("nats.url endpoint %q has invalid port: %w", endpoint, err)
+			}
+		}
 	}
 	if strings.TrimSpace(cfg.Stream) == "" {
 		return fmt.Errorf("nats.stream must not be empty")
@@ -586,6 +621,9 @@ func validateClickHouseConfig(cfg ClickHouseConfig) error {
 		if err != nil || strings.TrimSpace(host) == "" || strings.TrimSpace(port) == "" {
 			return fmt.Errorf("clickhouse.addr entry %q must be host:port", entry)
 		}
+		if err := validatePortNumber(port); err != nil {
+			return fmt.Errorf("clickhouse.addr entry %q has invalid port: %w", entry, err)
+		}
 	}
 	if strings.TrimSpace(cfg.Username) == "" {
 		return fmt.Errorf("clickhouse.username must not be empty when clickhouse.addr is configured")
@@ -639,6 +677,9 @@ func validateClickHouseConfig(cfg ClickHouseConfig) error {
 	if cfg.ConsumerAckWait <= 0 {
 		return fmt.Errorf("clickhouse.consumer_ack_wait must be greater than 0")
 	}
+	if cfg.ConsumerFetchMaxWait >= cfg.ConsumerAckWait {
+		return fmt.Errorf("clickhouse.consumer_fetch_max_wait must be less than clickhouse.consumer_ack_wait")
+	}
 	if cfg.ConsumerMaxAckPending <= 0 {
 		return fmt.Errorf("clickhouse.consumer_max_ack_pending must be greater than 0")
 	}
@@ -672,8 +713,25 @@ func validateClickHouseConfig(cfg ClickHouseConfig) error {
 	if cfg.RetentionTTL <= 0 {
 		return fmt.Errorf("clickhouse.retention_ttl must be greater than 0")
 	}
+	if cfg.FlushInterval >= cfg.ConsumerAckWait {
+		return fmt.Errorf("clickhouse.flush_interval must be less than clickhouse.consumer_ack_wait")
+	}
 	if cfg.InsertTimeout >= cfg.ConsumerAckWait {
 		return fmt.Errorf("clickhouse.insert_timeout must be less than clickhouse.consumer_ack_wait")
+	}
+	if cfg.InsertTimeout+cfg.FlushInterval >= cfg.ConsumerAckWait {
+		return fmt.Errorf("clickhouse.insert_timeout + clickhouse.flush_interval must be less than clickhouse.consumer_ack_wait")
+	}
+	return nil
+}
+
+func validatePortNumber(raw string) error {
+	port, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("port %q must be numeric", raw)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port %d must be in range 1..65535", port)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ image:
   repository: ghcr.io/evalops/ensemble-tap
   pullPolicy: IfNotPresent
   tag: ""
+  digest: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -13,6 +14,7 @@ serviceAccount:
   create: true
   annotations: {}
   name: ""
+  automount: false
 
 podAnnotations: {}
 podLabels: {}
@@ -69,6 +71,11 @@ podDisruptionBudget:
 
 networkPolicy:
   enabled: true
+  # Add one TCP egress rule that is auto-derived from config.nats.url and
+  # config.clickhouse.addr, plus networkPolicy.extraEgressPorts.
+  allowConfigPorts: true
+  # Additional egress TCP ports to allow cluster-wide.
+  extraEgressPorts: []
   ingress:
     - ports:
         - protocol: TCP
@@ -84,13 +91,7 @@ networkPolicy:
     - ports:
         - protocol: TCP
           port: 443
-    # Allow NATS and ClickHouse service traffic.
-    - ports:
-        - protocol: TCP
-          port: 4222
-        - protocol: TCP
-          port: 9000
-    # If you change config.nats.url or config.clickhouse.addr ports, update this egress rule.
+    # NATS/ClickHouse ports are derived automatically when allowConfigPorts=true.
 
 nodeSelector: {}
 tolerations: []
@@ -164,7 +165,7 @@ config:
     stream_max_bytes: 0
     stream_max_msg_size: 0
   clickhouse:
-    addr: clickhouse:9000
+    addr: ""
     database: ensemble
     table: tap_events
     username: default

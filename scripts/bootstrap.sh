@@ -10,6 +10,7 @@ provider=""
 provider_secret=""
 nats_url="nats://nats:4222"
 clickhouse_addr=""
+clickhouse_username=""
 clickhouse_password=""
 tenant_id=""
 skip_smoke="false"
@@ -31,6 +32,7 @@ Options:
   --provider-secret <value>  Webhook secret for chosen provider
   --nats-url <url>           NATS URL (default: nats://nats:4222)
   --clickhouse-addr <addr>   Optional ClickHouse host:port (empty disables sink)
+  --clickhouse-username <v>  Optional ClickHouse username (default: ensemble_tap_ingest when sink enabled)
   --clickhouse-password <v>  Optional ClickHouse password
   --tenant-id <id>           Optional tenant path segment for smoke test
   --skip-smoke               Skip webhook smoke test
@@ -75,6 +77,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --clickhouse-addr)
       clickhouse_addr="${2:-}"
+      shift 2
+      ;;
+    --clickhouse-username)
+      clickhouse_username="${2:-}"
       shift 2
       ;;
     --clickhouse-password)
@@ -167,6 +173,9 @@ fi
 if [[ -z "$clickhouse_addr" ]]; then
   read -r -p "ClickHouse addr (host:port, leave empty to disable sink): " clickhouse_addr
 fi
+if [[ -n "$clickhouse_addr" && -z "$clickhouse_username" ]]; then
+  clickhouse_username="ensemble_tap_ingest"
+fi
 if [[ -n "$clickhouse_addr" && -z "$clickhouse_password" ]]; then
   read -r -s -p "ClickHouse password (optional, press Enter to skip): " clickhouse_password
   echo
@@ -183,6 +192,11 @@ mkdir -p "$(dirname "$values_file")"
   echo "  - name: ${provider_env_name}"
   echo "    secretName: ${secret_name}"
   echo "    secretKey: ${provider_secret_key}"
+  if [[ -n "$clickhouse_addr" && -n "$clickhouse_username" ]]; then
+    echo "  - name: CLICKHOUSE_USERNAME"
+    echo "    secretName: ${secret_name}"
+    echo "    secretKey: clickhouseUsername"
+  fi
   if [[ -n "$clickhouse_addr" && -n "$clickhouse_password" ]]; then
     echo "  - name: CLICKHOUSE_PASSWORD"
     echo "    secretName: ${secret_name}"
@@ -198,6 +212,9 @@ mkdir -p "$(dirname "$values_file")"
   echo "  clickhouse:"
   if [[ -n "$clickhouse_addr" ]]; then
     echo "    addr: ${clickhouse_addr}"
+    if [[ -n "$clickhouse_username" ]]; then
+      echo "    username: \${CLICKHOUSE_USERNAME}"
+    fi
     if [[ -n "$clickhouse_password" ]]; then
       echo "    password: \${CLICKHOUSE_PASSWORD}"
     else
@@ -212,6 +229,9 @@ mkdir -p "$(dirname "$values_file")"
 } >"$values_file"
 
 secret_cmd=(kubectl -n "$namespace" create secret generic "$secret_name" --from-literal="${provider_secret_key}=${provider_secret}")
+if [[ -n "$clickhouse_addr" && -n "$clickhouse_username" ]]; then
+  secret_cmd+=(--from-literal="clickhouseUsername=${clickhouse_username}")
+fi
 if [[ -n "$clickhouse_addr" && -n "$clickhouse_password" ]]; then
   secret_cmd+=(--from-literal="clickhousePassword=${clickhouse_password}")
 fi

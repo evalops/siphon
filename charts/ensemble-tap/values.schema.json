@@ -2,6 +2,48 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        },
+        "tag": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "automount": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "config": {
       "type": "object",
       "properties": {
@@ -11,6 +53,7 @@
             "url": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^\\s*\\S+(\\s*,\\s*\\S+)*\\s*$",
               "description": "NATS server URL."
             },
             "stream": {
@@ -21,6 +64,7 @@
             "subject_prefix": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^[^\\s*>]+(?:\\.[^\\s*>]+)*$",
               "description": "Subject prefix for published events."
             },
             "tenant_scoped_subjects": {
@@ -145,6 +189,7 @@
             "stream_max_msg_size": {
               "type": "integer",
               "minimum": 0,
+              "maximum": 2147483647,
               "description": "Maximum message size accepted by JetStream stream in bytes (0 means unlimited)."
             }
           },
@@ -295,13 +340,15 @@
                 }
               }
             }
-          ]
+          ],
+          "additionalProperties": false
         },
         "clickhouse": {
           "type": "object",
           "properties": {
             "addr": {
               "type": "string",
+              "pattern": "^\\s*$|^\\s*[^,\\s]+:[0-9]{1,5}(\\s*,\\s*[^,\\s]+:[0-9]{1,5})*\\s*$",
               "description": "ClickHouse host:port (or comma-separated host:port list). Empty disables sink."
             },
             "database": {
@@ -527,11 +574,36 @@
                 }
               }
             }
-          ]
+          ],
+          "additionalProperties": false
         },
         "server": {
           "type": "object",
           "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "HTTP listen port."
+            },
+            "base_path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Webhook ingress base path."
+            },
+            "read_timeout": {
+              "type": "string",
+              "description": "HTTP server read timeout."
+            },
+            "write_timeout": {
+              "type": "string",
+              "description": "HTTP server write timeout."
+            },
+            "max_body_size": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum accepted request body size in bytes."
+            },
             "admin_token": {
               "type": "string",
               "description": "Primary admin token for /admin endpoints."
@@ -671,7 +743,8 @@
                 }
               }
             }
-          ]
+          ],
+          "additionalProperties": false
         }
       }
     },
@@ -730,6 +803,19 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
+        "allowConfigPorts": {
+          "type": "boolean",
+          "description": "Auto-allow TCP egress ports derived from config.nats.url and config.clickhouse.addr."
+        },
+        "extraEgressPorts": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "description": "Additional cluster-wide TCP egress ports to allow."
+        },
         "ingress": {
           "type": "array",
           "items": { "type": "object" }
@@ -738,7 +824,8 @@
           "type": "array",
           "items": { "type": "object" }
         }
-      }
+      },
+      "additionalProperties": false
     }
   }
 }

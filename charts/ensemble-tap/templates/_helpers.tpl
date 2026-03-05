@@ -39,3 +39,50 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "ensemble-tap.networkPolicyConfigPorts" -}}
+{{- $seen := dict -}}
+{{- $ports := list -}}
+{{- $natsURL := toString (default "" .Values.config.nats.url) -}}
+{{- range $raw := splitList "," $natsURL -}}
+  {{- $endpoint := trim $raw -}}
+  {{- if ne $endpoint "" -}}
+    {{- $port := "" -}}
+    {{- $match := regexFind ":[0-9]+([/?#].*)?$" $endpoint -}}
+    {{- if ne $match "" -}}
+      {{- $port = regexFind "[0-9]+" $match -}}
+    {{- else -}}
+      {{- $port = "4222" -}}
+    {{- end -}}
+    {{- if and (ne $port "") (not (hasKey $seen $port)) -}}
+      {{- $_ := set $seen $port true -}}
+      {{- $ports = append $ports (int $port) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $clickhouseAddr := toString (default "" .Values.config.clickhouse.addr) -}}
+{{- range $raw := splitList "," $clickhouseAddr -}}
+  {{- $endpoint := trim $raw -}}
+  {{- if ne $endpoint "" -}}
+    {{- $port := "" -}}
+    {{- $match := regexFind ":[0-9]+$" $endpoint -}}
+    {{- if ne $match "" -}}
+      {{- $port = regexFind "[0-9]+" $match -}}
+    {{- else -}}
+      {{- $port = "9000" -}}
+    {{- end -}}
+    {{- if and (ne $port "") (not (hasKey $seen $port)) -}}
+      {{- $_ := set $seen $port true -}}
+      {{- $ports = append $ports (int $port) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- range $extra := (default (list) .Values.networkPolicy.extraEgressPorts) -}}
+  {{- $port := trim (printf "%v" $extra) -}}
+  {{- if and (ne $port "") (not (hasKey $seen $port)) -}}
+    {{- $_ := set $seen $port true -}}
+    {{- $ports = append $ports (int $port) -}}
+  {{- end -}}
+{{- end -}}
+{{- toYaml $ports -}}
+{{- end -}}
