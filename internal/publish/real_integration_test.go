@@ -11,6 +11,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/evalops/ensemble-tap/config"
+	"github.com/evalops/ensemble-tap/internal/backoff"
 	"github.com/evalops/ensemble-tap/internal/normalize"
 	"github.com/nats-io/nats.go"
 )
@@ -79,12 +80,20 @@ func TestRealNATSClickHousePipeline(t *testing.T) {
 
 	var count uint64
 	deadline := time.Now().Add(20 * time.Second)
+	retryAttempt := 0
 	for time.Now().Before(deadline) {
 		query := fmt.Sprintf("SELECT count() FROM ensemble.%s WHERE id='evt_it_1'", table)
 		if err := conn.QueryRow(ctx, query).Scan(&count); err == nil && count >= 1 {
 			return
 		}
-		time.Sleep(500 * time.Millisecond)
+		delay := backoff.ExponentialDelay(retryAttempt, 100*time.Millisecond, time.Second)
+		retryAttempt++
+		if remaining := time.Until(deadline); delay > remaining {
+			delay = remaining
+		}
+		if delay <= 0 || !backoff.SleepContext(ctx, delay) {
+			break
+		}
 	}
 	t.Fatalf("event was not persisted to clickhouse within timeout")
 }

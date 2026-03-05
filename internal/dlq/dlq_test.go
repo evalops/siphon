@@ -28,16 +28,27 @@ func TestDLQRecordAndReplay(t *testing.T) {
 		t.Fatalf("new dlq publisher: %v", err)
 	}
 
-	rec := Record{Stage: "publish", Provider: "hubspot", Reason: "nats timeout", OriginalSubject: "ensemble.tap.hubspot.deal.updated", OriginalPayload: []byte(`{"id":"evt_1"}`), OriginalDedupID: "evt_1"}
+	rec := Record{
+		Stage:           "publish",
+		Provider:        "hubspot",
+		RequestID:       "req-dlq-1",
+		Reason:          "nats timeout",
+		OriginalSubject: "ensemble.tap.hubspot.deal.updated",
+		OriginalPayload: []byte(`{"id":"evt_1"}`),
+		OriginalDedupID: "evt_1",
+	}
 	if err := p.Record(context.Background(), rec); err != nil {
 		t.Fatalf("record dlq: %v", err)
 	}
 
 	replayed := 0
-	count, err := p.Replay(context.Background(), 10, func(ctx context.Context, subject string, payload []byte, dedupID string) error {
+	count, err := p.Replay(context.Background(), 10, func(ctx context.Context, subject string, payload []byte, dedupID string, requestID string) error {
 		replayed++
 		if subject != rec.OriginalSubject || dedupID != rec.OriginalDedupID {
 			t.Fatalf("unexpected replay record: %s %s", subject, dedupID)
+		}
+		if requestID != rec.RequestID {
+			t.Fatalf("unexpected replay request id: %q", requestID)
 		}
 		return nil
 	})
@@ -86,7 +97,7 @@ func TestDLQPending(t *testing.T) {
 		t.Fatalf("expected pending >= 1, got %d", pending)
 	}
 
-	if _, err := p.Replay(context.Background(), 10, func(ctx context.Context, subject string, payload []byte, dedupID string) error {
+	if _, err := p.Replay(context.Background(), 10, func(ctx context.Context, subject string, payload []byte, dedupID string, requestID string) error {
 		return nil
 	}); err != nil {
 		t.Fatalf("replay dlq: %v", err)

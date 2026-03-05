@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/evalops/ensemble-tap/config"
+	"github.com/evalops/ensemble-tap/internal/backoff"
 	"github.com/evalops/ensemble-tap/internal/health"
 	"github.com/evalops/ensemble-tap/internal/normalize"
 	"github.com/nats-io/nats.go"
@@ -137,6 +138,7 @@ func (s *ClickHouseSink) consumeLoop(ctx context.Context, sub *nats.Subscription
 
 	rows := make([]clickhouseRow, 0, s.cfg.BatchSize)
 	msgs := make([]*nats.Msg, 0, s.cfg.BatchSize)
+	fetchErrStreak := 0
 
 	flush := func() {
 		if len(rows) == 0 {
@@ -174,11 +176,18 @@ func (s *ClickHouseSink) consumeLoop(ctx context.Context, sub *nats.Subscription
 			fetched, err := sub.Fetch(min(100, s.cfg.BatchSize), nats.MaxWait(500*time.Millisecond))
 			if err != nil {
 				if err == nats.ErrTimeout {
+					fetchErrStreak = 0
 					continue
 				}
-				time.Sleep(500 * time.Millisecond)
+				fetchErrStreak++
+				delay := backoff.ExponentialDelay(fetchErrStreak-1, 100*time.Millisecond, 2*time.Second)
+				if !backoff.SleepContext(ctx, delay) {
+					flush()
+					return
+				}
 				continue
 			}
+			fetchErrStreak = 0
 			for _, msg := range fetched {
 				row, err := eventToRow(msg.Data)
 				if err != nil {

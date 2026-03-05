@@ -22,6 +22,8 @@ type NotionFetcher struct {
 	RefreshToken string
 	Scope        string
 	PageSize     int
+	MaxPages     int
+	MaxRequests  int
 }
 
 func (n *NotionFetcher) ProviderName() string { return "notion" }
@@ -38,6 +40,10 @@ func (n *NotionFetcher) Fetch(ctx context.Context, checkpoint string) (poller.Fe
 	if pageSize <= 0 {
 		pageSize = 100
 	}
+	maxPages, maxRequests := normalizeFetchBudget(n.MaxPages, n.MaxRequests)
+	requestCount := 0
+	pageCount := 0
+	truncated := false
 
 	cp := parseCheckpoint(checkpoint)
 	next := cp
@@ -55,6 +61,10 @@ func (n *NotionFetcher) Fetch(ctx context.Context, checkpoint string) (poller.Fe
 
 	cursor := ""
 	for {
+		if requestCount >= maxRequests || pageCount >= maxPages {
+			truncated = true
+			break
+		}
 		reqBody := map[string]any{
 			"page_size": pageSize,
 			"sort": map[string]any{
@@ -84,6 +94,7 @@ func (n *NotionFetcher) Fetch(ctx context.Context, checkpoint string) (poller.Fe
 			req.Header.Set("Content-Type", "application/json")
 			return req, nil
 		})
+		requestCount++
 		if err != nil {
 			return poller.FetchResult{}, fmt.Errorf("notion request failed: %w", err)
 		}
@@ -96,6 +107,7 @@ func (n *NotionFetcher) Fetch(ctx context.Context, checkpoint string) (poller.Fe
 		if err := json.Unmarshal(respBody, &out); err != nil {
 			return poller.FetchResult{}, fmt.Errorf("decode notion response: %w", err)
 		}
+		pageCount++
 
 		for _, item := range out.Results {
 			id := toString(item["id"])
@@ -125,9 +137,21 @@ func (n *NotionFetcher) Fetch(ctx context.Context, checkpoint string) (poller.Fe
 		if !out.HasMore || strings.TrimSpace(out.NextCursor) == "" {
 			break
 		}
+		if pageCount >= maxPages {
+			truncated = true
+			break
+		}
 		cursor = out.NextCursor
 	}
 	n.Token = token
 
-	return poller.FetchResult{Entities: entities, NextCheckpoint: formatCheckpoint(next, checkpoint)}, nil
+	return poller.FetchResult{
+		Entities:       entities,
+		NextCheckpoint: formatCheckpoint(next, checkpoint),
+		Stats: poller.FetchStats{
+			Requests:  requestCount,
+			Pages:     pageCount,
+			Truncated: truncated,
+		},
+	}, nil
 }

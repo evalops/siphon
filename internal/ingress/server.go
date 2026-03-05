@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,6 +110,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	reqID := webhookRequestID(r)
+	w.Header().Set("X-Request-ID", reqID)
 	provider := strings.ToLower(strings.TrimSpace(r.PathValue("provider")))
 	if provider == "" {
 		http.Error(w, "provider missing", http.StatusBadRequest)
@@ -151,15 +154,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			Stage:           "verify",
 			Provider:        provider,
 			TenantID:        cfg.TenantID,
+			RequestID:       reqID,
 			Reason:          err.Error(),
 			OriginalSubject: r.URL.Path,
 			OriginalPayload: body,
 		})
 		s.observe(provider, "rejected", start)
-		s.logger.Warn("webhook rejected", "provider", provider, "error", err)
+		s.logger.Warn("webhook rejected", "provider", provider, "request_id", reqID, "error", err)
 		http.Error(w, "signature verification failed", http.StatusUnauthorized)
 		return
 	}
+	hooked.Normalized.RequestID = reqID
 
 	ce, err := normalize.ToCloudEvent(hooked.Normalized)
 	if err != nil {
@@ -167,13 +172,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			Stage:           "normalize",
 			Provider:        provider,
 			TenantID:        cfg.TenantID,
+			RequestID:       reqID,
 			Reason:          err.Error(),
 			OriginalSubject: r.URL.Path,
 			OriginalDedupID: hooked.DedupID,
 			OriginalPayload: body,
 		})
 		s.observe(provider, "error", start)
-		s.logger.Error("normalize webhook", "provider", provider, "error", err)
+		s.logger.Error("normalize webhook", "provider", provider, "request_id", reqID, "error", err)
 		http.Error(w, "normalization failed", http.StatusInternalServerError)
 		return
 	}
@@ -189,10 +195,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		payload, _ := json.Marshal(ce)
 		s.recordDLQ(r.Context(), dlq.Record{
-			Stage:    "publish",
-			Provider: provider,
-			TenantID: cfg.TenantID,
-			Reason:   err.Error(),
+			Stage:     "publish",
+			Provider:  provider,
+			TenantID:  cfg.TenantID,
+			RequestID: reqID,
+			Reason:    err.Error(),
 			OriginalSubject: normalize.BuildSubjectWithTenant(
 				s.cfg.NATS.SubjectPrefix,
 				hooked.Normalized.TenantID,
@@ -205,7 +212,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			OriginalPayload: payload,
 		})
 		s.observe(provider, "error", start)
-		s.logger.Error("publish webhook", "provider", provider, "error", err)
+		s.logger.Error("publish webhook", "provider", provider, "request_id", reqID, "error", err)
 		http.Error(w, "publish failed", http.StatusInternalServerError)
 		return
 	}
@@ -214,10 +221,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"status":  "accepted",
-		"id":      ce.ID(),
-		"type":    ce.Type(),
-		"subject": subject,
+		"status":     "accepted",
+		"request_id": reqID,
+		"id":         ce.ID(),
+		"type":       ce.Type(),
+		"subject":    subject,
 	})
 }
 
@@ -258,4 +266,17 @@ func (s *Server) resolveProviderConfig(provider, tenantID string) (config.Provid
 		return base, true
 	}
 	return config.ApplyProviderTenant(base, tenantID), true
+}
+
+func webhookRequestID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(r.Header.Get("X-Request-ID")); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(r.Header.Get("X-Correlation-ID")); id != "" {
+		return id
+	}
+	return "ing-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
 }

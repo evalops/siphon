@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -269,6 +270,98 @@ func TestQuickBooksFetcherPagination(t *testing.T) {
 	}
 	if res.NextCheckpoint != "2026-03-03T16:20:00Z" {
 		t.Fatalf("unexpected quickbooks checkpoint: %q", res.NextCheckpoint)
+	}
+}
+
+func TestHubSpotFetcherFetchBudgetTruncates(t *testing.T) {
+	requestCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		nextCursor := ""
+		if requestCount < 10 {
+			nextCursor = "cursor-" + strconv.Itoa(requestCount+1)
+		}
+		resp := map[string]any{
+			"results": []any{
+				map[string]any{
+					"id": "deal_" + strconv.Itoa(requestCount),
+					"properties": map[string]any{
+						"hs_lastmodifieddate": "2026-03-03T14:22:00Z",
+					},
+				},
+			},
+		}
+		if nextCursor != "" {
+			resp["paging"] = map[string]any{"next": map[string]any{"after": nextCursor}}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	f := &HubSpotFetcher{
+		BaseURL:     ts.URL,
+		Token:       "hubspot-token",
+		Objects:     []string{"deals"},
+		Limit:       1,
+		MaxPages:    2,
+		MaxRequests: 2,
+	}
+	res, err := f.Fetch(context.Background(), "")
+	if err != nil {
+		t.Fatalf("fetch hubspot with budget: %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected 2 requests before truncation, got %d", requestCount)
+	}
+	if !res.Stats.Truncated || res.Stats.Pages != 2 || res.Stats.Requests != 2 {
+		t.Fatalf("expected truncated stats after budget hit, got %+v", res.Stats)
+	}
+	if len(res.Entities) != 2 {
+		t.Fatalf("expected 2 entities before truncation, got %d", len(res.Entities))
+	}
+}
+
+func TestQuickBooksFetcherFetchBudgetTruncates(t *testing.T) {
+	requestCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"QueryResponse": map[string]any{
+				"totalCount": "999",
+				"Customer": []any{
+					map[string]any{
+						"Id": "qb_" + strconv.Itoa(requestCount),
+						"MetaData": map[string]any{
+							"LastUpdatedTime": "2026-03-03T16:00:00Z",
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	f := &QuickBooksFetcher{
+		BaseURL:      ts.URL,
+		AccessToken:  "qb-token",
+		RealmID:      "realm-1",
+		Entities:     []string{"Customer"},
+		QueryPerPage: 1,
+		MaxRequests:  3,
+		MaxPages:     3,
+	}
+	res, err := f.Fetch(context.Background(), "")
+	if err != nil {
+		t.Fatalf("fetch quickbooks with budget: %v", err)
+	}
+	if requestCount != 3 {
+		t.Fatalf("expected 3 requests before truncation, got %d", requestCount)
+	}
+	if !res.Stats.Truncated || res.Stats.Pages != 3 || res.Stats.Requests != 3 {
+		t.Fatalf("expected truncated stats after budget hit, got %+v", res.Stats)
+	}
+	if len(res.Entities) != 3 {
+		t.Fatalf("expected 3 entities before truncation, got %d", len(res.Entities))
 	}
 }
 

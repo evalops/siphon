@@ -2,6 +2,8 @@ package publish
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,6 +141,96 @@ func TestNATSPublisherTenantScopedSubject(t *testing.T) {
 	}
 	if subject != "ensemble.tap.tenant_1.stripe.invoice.paid" {
 		t.Fatalf("unexpected subject: %q", subject)
+	}
+}
+
+func TestNATSPublisherSetsRequestIDHeader(t *testing.T) {
+	s := runNATSServer(t)
+	cfg := config.NATSConfig{
+		URL:           s.ClientURL(),
+		Stream:        "ENSEMBLE_TAP_REQ_ID_HEADER",
+		SubjectPrefix: "ensemble.tap",
+		MaxAge:        time.Hour,
+		DedupWindow:   2 * time.Minute,
+	}
+
+	ctx := context.Background()
+	pub, err := NewNATSPublisher(ctx, cfg, nil)
+	if err != nil {
+		t.Fatalf("new publisher: %v", err)
+	}
+	defer pub.Close()
+
+	evt, err := normalize.ToCloudEvent(normalize.NormalizedEvent{
+		Provider:        "stripe",
+		EntityType:      "invoice",
+		EntityID:        "in_123",
+		Action:          "paid",
+		ProviderEventID: "evt_123",
+		ProviderTime:    time.Now().UTC(),
+		RequestID:       "req-nats-1",
+	})
+	if err != nil {
+		t.Fatalf("build cloud event: %v", err)
+	}
+
+	if _, err := pub.Publish(ctx, evt, "req_id_header_1"); err != nil {
+		t.Fatalf("publish message: %v", err)
+	}
+
+	stored, err := pub.js.GetMsg(cfg.Stream, 1)
+	if err != nil {
+		t.Fatalf("get stored message: %v", err)
+	}
+	if got := strings.TrimSpace(stored.Header.Get(natsRequestIDHeader)); got != "req-nats-1" {
+		t.Fatalf("expected request id header req-nats-1, got %q", got)
+	}
+}
+
+func TestNATSPublisherRawInfersRequestIDHeaderFromPayload(t *testing.T) {
+	s := runNATSServer(t)
+	cfg := config.NATSConfig{
+		URL:           s.ClientURL(),
+		Stream:        "ENSEMBLE_TAP_RAW_REQ_ID_HEADER",
+		SubjectPrefix: "ensemble.tap",
+		MaxAge:        time.Hour,
+		DedupWindow:   2 * time.Minute,
+	}
+
+	ctx := context.Background()
+	pub, err := NewNATSPublisher(ctx, cfg, nil)
+	if err != nil {
+		t.Fatalf("new publisher: %v", err)
+	}
+	defer pub.Close()
+
+	evt, err := normalize.ToCloudEvent(normalize.NormalizedEvent{
+		Provider:        "github",
+		EntityType:      "issues",
+		EntityID:        "7",
+		Action:          "opened",
+		ProviderEventID: "evt_gh_7",
+		ProviderTime:    time.Now().UTC(),
+		RequestID:       "req-raw-1",
+	})
+	if err != nil {
+		t.Fatalf("build cloud event: %v", err)
+	}
+	payload, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatalf("marshal cloud event: %v", err)
+	}
+
+	if err := pub.PublishRaw(ctx, "ensemble.tap.github.issues.opened", payload, "raw_req_id_1", ""); err != nil {
+		t.Fatalf("publish raw message: %v", err)
+	}
+
+	stored, err := pub.js.GetMsg(cfg.Stream, 1)
+	if err != nil {
+		t.Fatalf("get stored message: %v", err)
+	}
+	if got := strings.TrimSpace(stored.Header.Get(natsRequestIDHeader)); got != "req-raw-1" {
+		t.Fatalf("expected request id header req-raw-1, got %q", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/evalops/ensemble-tap/config"
+	"github.com/evalops/ensemble-tap/internal/backoff"
 	"github.com/evalops/ensemble-tap/internal/health"
 	"github.com/evalops/ensemble-tap/internal/normalize"
 	"github.com/nats-io/nats.go"
@@ -22,6 +23,8 @@ type NATSPublisher struct {
 	metrics *health.Metrics
 	ready   atomic.Bool
 }
+
+const natsRequestIDHeader = "X-Request-ID"
 
 func NewNATSPublisher(ctx context.Context, cfg config.NATSConfig, metrics *health.Metrics) (*NATSPublisher, error) {
 	nc, err := nats.Connect(cfg.URL, nats.Name("ensemble-tap"))
@@ -118,6 +121,13 @@ func (p *NATSPublisher) Publish(ctx context.Context, event cloudevents.Event, de
 		dedupID = event.ID()
 	}
 	msg.Header.Set(nats.MsgIdHdr, dedupID)
+	requestID := strings.TrimSpace(data.RequestID)
+	if requestID == "" {
+		requestID = requestIDFromCloudEvent(event)
+	}
+	if requestID != "" {
+		msg.Header.Set(natsRequestIDHeader, requestID)
+	}
 
 	ack, err := p.js.PublishMsg(msg, nats.Context(ctx))
 	if err != nil {
@@ -136,13 +146,20 @@ func (p *NATSPublisher) Publish(ctx context.Context, event cloudevents.Event, de
 	return subject, nil
 }
 
-func (p *NATSPublisher) PublishRaw(ctx context.Context, subject string, payload []byte, dedupID string) error {
+func (p *NATSPublisher) PublishRaw(ctx context.Context, subject string, payload []byte, dedupID string, requestID string) error {
 	if !p.ready.Load() {
 		return fmt.Errorf("nats not ready")
 	}
 	msg := &nats.Msg{Subject: subject, Data: payload, Header: nats.Header{}}
 	if strings.TrimSpace(dedupID) != "" {
 		msg.Header.Set(nats.MsgIdHdr, dedupID)
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		requestID = requestIDFromCloudEventPayload(payload)
+	}
+	if requestID != "" {
+		msg.Header.Set(natsRequestIDHeader, requestID)
 	}
 	_, err := p.js.PublishMsg(msg, nats.Context(ctx))
 	return err
@@ -175,11 +192,54 @@ func (p *NATSPublisher) WaitForClosed(timeout time.Duration) {
 	if p.nc == nil {
 		return
 	}
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
 	deadline := time.Now().Add(timeout)
+	attempt := 0
 	for time.Now().Before(deadline) {
 		if p.nc.IsClosed() {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		delay := backoff.ExponentialDelay(attempt, 10*time.Millisecond, 250*time.Millisecond)
+		attempt++
+		if remaining := time.Until(deadline); delay > remaining {
+			delay = remaining
+		}
+		if delay <= 0 {
+			return
+		}
+		time.Sleep(delay)
 	}
+}
+
+func requestIDFromCloudEvent(event cloudevents.Event) string {
+	if ext := event.Extensions(); ext != nil {
+		if raw, ok := ext[normalize.TapRequestIDExtension]; ok {
+			switch typed := raw.(type) {
+			case string:
+				return strings.TrimSpace(typed)
+			case fmt.Stringer:
+				return strings.TrimSpace(typed.String())
+			default:
+				return strings.TrimSpace(fmt.Sprint(raw))
+			}
+		}
+	}
+	var data normalize.TapEventData
+	if err := event.DataAs(&data); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(data.RequestID)
+}
+
+func requestIDFromCloudEventPayload(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var event cloudevents.Event
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return ""
+	}
+	return requestIDFromCloudEvent(event)
 }

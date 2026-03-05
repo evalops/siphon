@@ -15,6 +15,11 @@ import (
 	"github.com/evalops/ensemble-tap/internal/poller"
 )
 
+const (
+	defaultFetchMaxPages    = 200
+	defaultFetchMaxRequests = 400
+)
+
 func clientOrDefault(c *http.Client) *http.Client {
 	if c != nil {
 		return c
@@ -252,6 +257,16 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max]
+}
+
+func normalizeFetchBudget(maxPages, maxRequests int) (int, int) {
+	if maxPages <= 0 {
+		maxPages = defaultFetchMaxPages
+	}
+	if maxRequests <= 0 {
+		maxRequests = defaultFetchMaxRequests
+	}
+	return maxPages, maxRequests
 }
 
 func validateOutboundRequest(req *http.Request) error {

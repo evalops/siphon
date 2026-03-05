@@ -8,6 +8,7 @@ import (
 )
 
 const TapSchemaVersion = "v1"
+const TapRequestIDExtension = "taprequestid"
 
 func ValidateNormalizedEvent(in NormalizedEvent) error {
 	if strings.TrimSpace(in.Provider) == "" {

@@ -62,6 +62,12 @@ func ApplyProviderTenant(base ProviderConfig, tenantKey string) ProviderConfig {
 	if tenantCfg.PollJitterRatio > 0 {
 		out.PollJitterRatio = tenantCfg.PollJitterRatio
 	}
+	if tenantCfg.PollMaxPages > 0 {
+		out.PollMaxPages = tenantCfg.PollMaxPages
+	}
+	if tenantCfg.PollMaxRequests > 0 {
+		out.PollMaxRequests = tenantCfg.PollMaxRequests
+	}
 	out.Tenants = nil
 	return out
 }

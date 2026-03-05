@@ -20,6 +20,7 @@ type Record struct {
 	Stage           string    `json:"stage"`
 	Provider        string    `json:"provider"`
 	TenantID        string    `json:"tenant_id,omitempty"`
+	RequestID       string    `json:"request_id,omitempty"`
 	Reason          string    `json:"reason"`
 	OriginalSubject string    `json:"original_subject,omitempty"`
 	OriginalDedupID string    `json:"original_dedup_id,omitempty"`
@@ -27,7 +28,7 @@ type Record struct {
 	OccurredAt      time.Time `json:"occurred_at"`
 }
 
-type Republisher func(ctx context.Context, subject string, payload []byte, dedupID string) error
+type Republisher func(ctx context.Context, subject string, payload []byte, dedupID string, requestID string) error
 
 type Publisher struct {
 	js       nats.JetStreamContext
@@ -133,7 +134,7 @@ func (p *Publisher) Replay(ctx context.Context, limit int, republish Republisher
 			_ = msg.Term()
 			continue
 		}
-		if err := republish(ctx, rec.OriginalSubject, rec.OriginalPayload, rec.OriginalDedupID); err != nil {
+		if err := republish(ctx, rec.OriginalSubject, rec.OriginalPayload, rec.OriginalDedupID, strings.TrimSpace(rec.RequestID)); err != nil {
 			_ = msg.Nak()
 			return replayed, err
 		}
@@ -165,7 +166,7 @@ func (p *Publisher) Pending() (int, error) {
 }
 
 func buildID(rec Record) string {
-	raw := strings.Join([]string{rec.Stage, rec.Provider, rec.TenantID, rec.Reason, rec.OriginalSubject, rec.OriginalDedupID}, "|")
+	raw := strings.Join([]string{rec.Stage, rec.Provider, rec.TenantID, rec.RequestID, rec.Reason, rec.OriginalSubject, rec.OriginalDedupID}, "|")
 	s := sha256.Sum256([]byte(raw))
 	return "dlq_" + hex.EncodeToString(s[:])
 }

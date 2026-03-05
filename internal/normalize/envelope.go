@@ -25,6 +25,7 @@ type TapEventData struct {
 	ProviderEventID   string                 `json:"provider_event_id,omitempty"`
 	ProviderTimestamp string                 `json:"provider_timestamp,omitempty"`
 	TenantID          string                 `json:"tenant_id,omitempty"`
+	RequestID         string                 `json:"request_id,omitempty"`
 }
 
 type NormalizedEvent struct {
@@ -35,6 +36,7 @@ type NormalizedEvent struct {
 	ProviderEventID string
 	ProviderTime    time.Time
 	TenantID        string
+	RequestID       string
 	Changes         map[string]FieldChange
 	Snapshot        map[string]any
 }
@@ -81,6 +83,10 @@ func ToCloudEvent(in NormalizedEvent) (cloudevents.Event, error) {
 		Snapshot:        in.Snapshot,
 		ProviderEventID: in.ProviderEventID,
 		TenantID:        in.TenantID,
+		RequestID:       strings.TrimSpace(in.RequestID),
+	}
+	if data.RequestID != "" {
+		e.SetExtension(TapRequestIDExtension, data.RequestID)
 	}
 	if !in.ProviderTime.IsZero() {
 		data.ProviderTimestamp = in.ProviderTime.UTC().Format(time.RFC3339Nano)

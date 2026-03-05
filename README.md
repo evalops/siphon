@@ -8,10 +8,12 @@ Ensemble Tap is a standalone Go service that ingests SaaS webhook events, normal
 - Multi-tenant webhook routing via `POST /webhooks/{provider}` and `POST /webhooks/{provider}/{tenant}`.
 - Polling engine with provider pollers for HubSpot, Salesforce, QuickBooks, and Notion.
 - Poll-mode supports tenant fan-out from provider tenant overrides with tenant-scoped state tracking.
-- Poll config supports per-tenant `poll_interval`, `poll_rate_limit_per_sec`, `poll_burst`, `poll_failure_budget`, `poll_circuit_break_duration`, and `poll_jitter_ratio` overrides.
+- Poll config supports per-tenant `poll_interval`, `poll_rate_limit_per_sec`, `poll_burst`, `poll_max_pages`, `poll_max_requests`, `poll_failure_budget`, `poll_circuit_break_duration`, and `poll_jitter_ratio` overrides.
+- Poll fetch telemetry includes request/page counts and truncation metrics for bounded fetch budgets.
 - Durable poll state backends (`memory` or `sqlite`).
 - CloudEvents normalization and schema validation (`tapversion=v1`).
 - NATS JetStream publisher with dedup IDs and optional tenant-scoped subjects.
+- Ingress request IDs propagate through CloudEvents (`taprequestid`/`request_id`), NATS headers (`X-Request-ID`), and DLQ records.
 - Optional ClickHouse sink consuming from NATS with batched inserts.
 - Dead-letter queue recording for verification/normalization/publish failures.
 - Admin DLQ replay endpoints:

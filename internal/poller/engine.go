@@ -31,6 +31,20 @@ type Entity struct {
 type FetchResult struct {
 	Entities       []Entity
 	NextCheckpoint string
+	Stats          FetchStats
+}
+
+type FetchStats struct {
+	Requests  int
+	Pages     int
+	Truncated bool
+}
+
+type CycleStats struct {
+	FetchedEntities   int
+	PublishedEntities int
+	SkippedUnchanged  int
+	Fetch             FetchStats
 }
 
 type Fetcher interface {
@@ -39,17 +53,23 @@ type Fetcher interface {
 }
 
 func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore, snapshots SnapshotStore, sink EventSink, tenantID string) error {
+	_, err := RunCycleWithStats(ctx, fetcher, checkpoints, snapshots, sink, tenantID)
+	return err
+}
+
+func RunCycleWithStats(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore, snapshots SnapshotStore, sink EventSink, tenantID string) (CycleStats, error) {
+	stats := CycleStats{}
 	if fetcher == nil {
-		return fmt.Errorf("fetcher is required")
+		return stats, fmt.Errorf("fetcher is required")
 	}
 	if checkpoints == nil {
-		return fmt.Errorf("checkpoint store is required")
+		return stats, fmt.Errorf("checkpoint store is required")
 	}
 	if snapshots == nil {
-		return fmt.Errorf("snapshot store is required")
+		return stats, fmt.Errorf("snapshot store is required")
 	}
 	if sink == nil {
-		return fmt.Errorf("event sink is required")
+		return stats, fmt.Errorf("event sink is required")
 	}
 
 	provider := fetcher.ProviderName()
@@ -58,8 +78,10 @@ func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore,
 
 	res, err := fetcher.Fetch(ctx, checkpoint)
 	if err != nil {
-		return err
+		return stats, err
 	}
+	stats.FetchedEntities = len(res.Entities)
+	stats.Fetch = res.Stats
 
 	for _, entity := range res.Entities {
 		if entity.Provider == "" {
@@ -82,6 +104,7 @@ func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore,
 			action = "created"
 		}
 		if exists && len(changes) == 0 {
+			stats.SkippedUnchanged++
 			continue
 		}
 
@@ -97,19 +120,20 @@ func RunCycle(ctx context.Context, fetcher Fetcher, checkpoints CheckpointStore,
 		}
 		dedup := dedupID(entity, action, tenantID)
 		if err := sink.Publish(ctx, evt, dedup); err != nil {
-			return fmt.Errorf("publish poll event: %w", err)
+			return stats, fmt.Errorf("publish poll event: %w", err)
 		}
+		stats.PublishedEntities++
 		if err := snapshots.Put(stateProvider, entity.EntityType, entity.EntityID, entity.Snapshot); err != nil {
-			return fmt.Errorf("store snapshot: %w", err)
+			return stats, fmt.Errorf("store snapshot: %w", err)
 		}
 	}
 
 	if res.NextCheckpoint != "" {
 		if err := checkpoints.Set(stateProvider, res.NextCheckpoint); err != nil {
-			return fmt.Errorf("store checkpoint: %w", err)
+			return stats, fmt.Errorf("store checkpoint: %w", err)
 		}
 	}
-	return nil
+	return stats, nil
 }
 
 func dedupID(entity Entity, action, tenantID string) string {

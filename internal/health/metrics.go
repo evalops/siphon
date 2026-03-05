@@ -20,6 +20,9 @@ type Metrics struct {
 	AdminReplayJobsInFlight          prometheus.Gauge
 	PollerStuck                      *prometheus.GaugeVec
 	PollerConsecutiveFailures        *prometheus.GaugeVec
+	PollerFetchRequestsTotal         *prometheus.CounterVec
+	PollerFetchPagesTotal            *prometheus.CounterVec
+	PollerFetchTruncatedTotal        *prometheus.CounterVec
 	ProviderHealth                   *prometheus.GaugeVec
 	NATSConnected                    prometheus.Gauge
 }
@@ -81,6 +84,18 @@ func NewMetrics() *Metrics {
 			PollerConsecutiveFailures: promauto.NewGaugeVec(prometheus.GaugeOpts{
 				Name: "tap_poller_consecutive_failures",
 				Help: "Current consecutive poller failures by provider and tenant.",
+			}, []string{"provider", "tenant"}),
+			PollerFetchRequestsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "tap_poller_fetch_requests_total",
+				Help: "Upstream API requests issued by pollers by provider and tenant.",
+			}, []string{"provider", "tenant"}),
+			PollerFetchPagesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "tap_poller_fetch_pages_total",
+				Help: "Poller response pages processed by provider and tenant.",
+			}, []string{"provider", "tenant"}),
+			PollerFetchTruncatedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "tap_poller_fetch_truncated_total",
+				Help: "Poll cycles truncated due to configured fetch page/request budgets.",
 			}, []string{"provider", "tenant"}),
 			ProviderHealth: promauto.NewGaugeVec(prometheus.GaugeOpts{
 				Name: "tap_provider_health",

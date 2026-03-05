@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -64,6 +65,7 @@ func TestServerAcceptsGenericWebhook(t *testing.T) {
 	req.Header.Set("X-Signature", signSHA256Hex(secret, body))
 	req.Header.Set("X-Event-Type", "invoice.paid")
 	req.Header.Set("X-Event-Id", "evt_123")
+	req.Header.Set("X-Request-ID", "req-ingress-1")
 
 	rr := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(rr, req)
@@ -90,6 +92,31 @@ func TestServerAcceptsGenericWebhook(t *testing.T) {
 	}
 	if resp["id"] != "evt_123" {
 		t.Fatalf("unexpected id payload: %#v", resp)
+	}
+	if resp["request_id"] != "req-ingress-1" {
+		t.Fatalf("unexpected request id payload: %#v", resp)
+	}
+	if got := strings.TrimSpace(rr.Header().Get("X-Request-ID")); got != "req-ingress-1" {
+		t.Fatalf("unexpected response request id header: %q", got)
+	}
+
+	var data normalize.TapEventData
+	if err := pub.lastEvent.DataAs(&data); err != nil {
+		t.Fatalf("decode cloud event data: %v", err)
+	}
+	if data.RequestID != "req-ingress-1" {
+		t.Fatalf("expected request id in cloud event data, got %q", data.RequestID)
+	}
+	extRaw, ok := pub.lastEvent.Extensions()[normalize.TapRequestIDExtension]
+	if !ok {
+		t.Fatalf("expected request id extension to be present")
+	}
+	ext, ok := extRaw.(string)
+	if !ok {
+		t.Fatalf("expected request id extension string, got %T", extRaw)
+	}
+	if got := strings.TrimSpace(ext); got != "req-ingress-1" {
+		t.Fatalf("expected request id extension %q, got %q", "req-ingress-1", got)
 	}
 }
 
@@ -164,6 +191,7 @@ func TestServerRecordsTenantScopedDLQSubjectOnPublishFailure(t *testing.T) {
 	req.Header.Set("X-Signature", signSHA256Hex(secret, body))
 	req.Header.Set("X-Event-Type", "deal.updated")
 	req.Header.Set("X-Event-Id", "evt_1")
+	req.Header.Set("X-Correlation-ID", "corr-ingress-1")
 
 	rr := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(rr, req)
@@ -176,6 +204,12 @@ func TestServerRecordsTenantScopedDLQSubjectOnPublishFailure(t *testing.T) {
 	}
 	if got := dlqRecorder.records[0].OriginalSubject; got != "custom.tap.tenant_a.acme.deal.updated" {
 		t.Fatalf("unexpected dlq replay subject: %q", got)
+	}
+	if got := dlqRecorder.records[0].RequestID; got != "corr-ingress-1" {
+		t.Fatalf("unexpected dlq request id: %q", got)
+	}
+	if got := strings.TrimSpace(rr.Header().Get("X-Request-ID")); got != "corr-ingress-1" {
+		t.Fatalf("unexpected response request id header: %q", got)
 	}
 }
 

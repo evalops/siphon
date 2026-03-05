@@ -11,6 +11,39 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const adminReplaySQLiteSchemaVersion = 2
+
+var adminReplaySQLiteMigrations = map[int][]string{
+	1: {
+		`CREATE TABLE IF NOT EXISTS admin_replay_jobs (
+			job_id TEXT PRIMARY KEY,
+			status TEXT NOT NULL,
+			requested_limit INTEGER NOT NULL,
+			effective_limit INTEGER NOT NULL,
+			max_limit INTEGER NOT NULL,
+			capped INTEGER NOT NULL,
+			dry_run INTEGER NOT NULL,
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			completed_at TEXT,
+			replayed INTEGER NOT NULL,
+			operator_reason TEXT,
+			cancel_reason TEXT,
+			error TEXT,
+			idempotency_key TEXT,
+			creator_ip TEXT,
+			creator_token_fingerprint TEXT,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_admin_replay_jobs_status ON admin_replay_jobs(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_admin_replay_jobs_updated_at ON admin_replay_jobs(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_admin_replay_jobs_idempotency ON admin_replay_jobs(idempotency_key)`,
+	},
+	2: {
+		`ALTER TABLE admin_replay_jobs ADD COLUMN request_id TEXT`,
+	},
+}
+
 type adminReplayJobSQLiteStore struct {
 	db *sql.DB
 }
@@ -30,6 +63,10 @@ func newAdminReplayJobSQLiteStore(path string) (*adminReplayJobSQLiteStore, erro
 	if err != nil {
 		return nil, fmt.Errorf("open admin replay sqlite database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxIdleTime(0)
+	db.SetConnMaxLifetime(0)
 	store := &adminReplayJobSQLiteStore{db: db}
 	if err := store.init(); err != nil {
 		_ = db.Close()
@@ -42,33 +79,70 @@ func (s *adminReplayJobSQLiteStore) init() error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("admin replay sqlite store is not initialized")
 	}
-	const schema = `
-CREATE TABLE IF NOT EXISTS admin_replay_jobs (
-	job_id TEXT PRIMARY KEY,
-	status TEXT NOT NULL,
-	requested_limit INTEGER NOT NULL,
-	effective_limit INTEGER NOT NULL,
-	max_limit INTEGER NOT NULL,
-	capped INTEGER NOT NULL,
-	dry_run INTEGER NOT NULL,
-	created_at TEXT NOT NULL,
-	started_at TEXT,
-	completed_at TEXT,
-	replayed INTEGER NOT NULL,
-	operator_reason TEXT,
-	cancel_reason TEXT,
-	error TEXT,
-	idempotency_key TEXT,
-	creator_ip TEXT,
-	creator_token_fingerprint TEXT,
-	updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_admin_replay_jobs_status ON admin_replay_jobs(status);
-CREATE INDEX IF NOT EXISTS idx_admin_replay_jobs_updated_at ON admin_replay_jobs(updated_at);
-CREATE INDEX IF NOT EXISTS idx_admin_replay_jobs_idempotency ON admin_replay_jobs(idempotency_key);
-`
-	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("initialize admin replay sqlite schema: %w", err)
+	if err := s.applyPragmas(); err != nil {
+		return err
+	}
+	if err := s.applyMigrations(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *adminReplayJobSQLiteStore) applyPragmas() error {
+	pragmas := []string{
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = NORMAL`,
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA foreign_keys = ON`,
+	}
+	for _, stmt := range pragmas {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("apply admin replay sqlite pragma %q: %w", stmt, err)
+		}
+	}
+	return nil
+}
+
+func (s *adminReplayJobSQLiteStore) applyMigrations() error {
+	var currentVersion int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&currentVersion); err != nil {
+		return fmt.Errorf("read admin replay sqlite schema version: %w", err)
+	}
+	if currentVersion >= adminReplaySQLiteSchemaVersion {
+		return nil
+	}
+
+	for version := currentVersion + 1; version <= adminReplaySQLiteSchemaVersion; version++ {
+		stmts, ok := adminReplaySQLiteMigrations[version]
+		if !ok {
+			return fmt.Errorf("missing admin replay sqlite migration for version %d", version)
+		}
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin admin replay sqlite migration %d: %w", version, err)
+		}
+		rolledBack := false
+		rollback := func(cause error) error {
+			if !rolledBack {
+				_ = tx.Rollback()
+				rolledBack = true
+			}
+			return cause
+		}
+		for _, stmt := range stmts {
+			if _, err := tx.Exec(stmt); err != nil {
+				if version == 2 && strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+					continue
+				}
+				return rollback(fmt.Errorf("apply admin replay sqlite migration %d statement: %w", version, err))
+			}
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+			return rollback(fmt.Errorf("set admin replay sqlite schema version %d: %w", version, err))
+		}
+		if err := tx.Commit(); err != nil {
+			return rollback(fmt.Errorf("commit admin replay sqlite migration %d: %w", version, err))
+		}
 	}
 	return nil
 }
@@ -90,6 +164,7 @@ SELECT
 	started_at,
 	completed_at,
 	replayed,
+	request_id,
 	operator_reason,
 	cancel_reason,
 	error,
@@ -117,6 +192,7 @@ FROM admin_replay_jobs`)
 			startedAtRaw   sql.NullString
 			completedAtRaw sql.NullString
 			replayed       int
+			requestID      sql.NullString
 			operatorReason sql.NullString
 			cancelReason   sql.NullString
 			errMsg         sql.NullString
@@ -137,6 +213,7 @@ FROM admin_replay_jobs`)
 			&startedAtRaw,
 			&completedAtRaw,
 			&replayed,
+			&requestID,
 			&operatorReason,
 			&cancelReason,
 			&errMsg,
@@ -176,6 +253,7 @@ FROM admin_replay_jobs`)
 				StartedAt:      startedAt.UTC(),
 				CompletedAt:    completedAt.UTC(),
 				Replayed:       replayed,
+				RequestID:      strings.TrimSpace(requestID.String),
 				OperatorReason: strings.TrimSpace(operatorReason.String),
 				CancelReason:   strings.TrimSpace(cancelReason.String),
 				Error:          strings.TrimSpace(errMsg.String),
@@ -210,6 +288,7 @@ INSERT INTO admin_replay_jobs (
 	started_at,
 	completed_at,
 	replayed,
+	request_id,
 	operator_reason,
 	cancel_reason,
 	error,
@@ -217,7 +296,7 @@ INSERT INTO admin_replay_jobs (
 	creator_ip,
 	creator_token_fingerprint,
 	updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(job_id) DO UPDATE SET
 	status=excluded.status,
 	requested_limit=excluded.requested_limit,
@@ -229,6 +308,7 @@ ON CONFLICT(job_id) DO UPDATE SET
 	started_at=excluded.started_at,
 	completed_at=excluded.completed_at,
 	replayed=excluded.replayed,
+	request_id=excluded.request_id,
 	operator_reason=excluded.operator_reason,
 	cancel_reason=excluded.cancel_reason,
 	error=excluded.error,
@@ -248,6 +328,7 @@ ON CONFLICT(job_id) DO UPDATE SET
 		optionalTimestamp(snapshot.StartedAt),
 		optionalTimestamp(snapshot.CompletedAt),
 		snapshot.Replayed,
+		nullableString(snapshot.RequestID),
 		nullableString(snapshot.OperatorReason),
 		nullableString(snapshot.CancelReason),
 		nullableString(snapshot.Error),

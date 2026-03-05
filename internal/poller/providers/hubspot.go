@@ -24,6 +24,8 @@ type HubSpotFetcher struct {
 	Scope        string
 	Objects      []string
 	Limit        int
+	MaxPages     int
+	MaxRequests  int
 }
 
 func (h *HubSpotFetcher) ProviderName() string { return "hubspot" }
@@ -44,6 +46,10 @@ func (h *HubSpotFetcher) Fetch(ctx context.Context, checkpoint string) (poller.F
 	if limit <= 0 {
 		limit = 100
 	}
+	maxPages, maxRequests := normalizeFetchBudget(h.MaxPages, h.MaxRequests)
+	requestCount := 0
+	pageCount := 0
+	truncated := false
 
 	cp := parseCheckpoint(checkpoint)
 	next := cp
@@ -59,9 +65,16 @@ func (h *HubSpotFetcher) Fetch(ctx context.Context, checkpoint string) (poller.F
 	}
 
 	for _, object := range objects {
+		if truncated {
+			break
+		}
 		url := trimTrailingSlash(h.BaseURL) + "/crm/v3/objects/" + strings.TrimSpace(object) + "/search"
 		after := ""
 		for {
+			if requestCount >= maxRequests || pageCount >= maxPages {
+				truncated = true
+				break
+			}
 			reqPayload := map[string]any{"limit": limit}
 			if !cp.IsZero() {
 				reqPayload["filterGroups"] = []any{map[string]any{"filters": []any{map[string]any{
@@ -87,6 +100,7 @@ func (h *HubSpotFetcher) Fetch(ctx context.Context, checkpoint string) (poller.F
 				req.Header.Set("Authorization", "Bearer "+accessToken)
 				return req, nil
 			})
+			requestCount++
 			if err != nil {
 				return poller.FetchResult{}, fmt.Errorf("hubspot request failed: %w", err)
 			}
@@ -105,6 +119,7 @@ func (h *HubSpotFetcher) Fetch(ctx context.Context, checkpoint string) (poller.F
 			if err := json.Unmarshal(respBody, &out); err != nil {
 				return poller.FetchResult{}, fmt.Errorf("decode hubspot response: %w", err)
 			}
+			pageCount++
 
 			for _, item := range out.Results {
 				snapshot := cloneMap(item.Properties)
@@ -129,10 +144,22 @@ func (h *HubSpotFetcher) Fetch(ctx context.Context, checkpoint string) (poller.F
 			if nextAfter == "" || nextAfter == after {
 				break
 			}
+			if pageCount >= maxPages {
+				truncated = true
+				break
+			}
 			after = nextAfter
 		}
 	}
 	h.Token = token
 
-	return poller.FetchResult{Entities: entities, NextCheckpoint: formatCheckpoint(next, checkpoint)}, nil
+	return poller.FetchResult{
+		Entities:       entities,
+		NextCheckpoint: formatCheckpoint(next, checkpoint),
+		Stats: poller.FetchStats{
+			Requests:  requestCount,
+			Pages:     pageCount,
+			Truncated: truncated,
+		},
+	}, nil
 }

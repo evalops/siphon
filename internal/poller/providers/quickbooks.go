@@ -25,6 +25,8 @@ type QuickBooksFetcher struct {
 	RealmID      string
 	Entities     []string
 	QueryPerPage int
+	MaxPages     int
+	MaxRequests  int
 }
 
 func (q *QuickBooksFetcher) ProviderName() string { return "quickbooks" }
@@ -48,6 +50,10 @@ func (q *QuickBooksFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 	if limit <= 0 {
 		limit = 100
 	}
+	maxPages, maxRequests := normalizeFetchBudget(q.MaxPages, q.MaxRequests)
+	requestCount := 0
+	pageCount := 0
+	truncated := false
 
 	cp := parseCheckpoint(checkpoint)
 	next := cp
@@ -64,9 +70,16 @@ func (q *QuickBooksFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 	}
 
 	for _, entityName := range entitiesList {
+		if truncated {
+			break
+		}
 		startPosition := 1
 		seenEntityNames := map[string]struct{}{}
 		for {
+			if requestCount >= maxRequests || pageCount >= maxPages {
+				truncated = true
+				break
+			}
 			query := fmt.Sprintf("SELECT * FROM %s", entityName)
 			if !cp.IsZero() {
 				query += " WHERE MetaData.LastUpdatedTime > '" + cp.UTC().Format(time.RFC3339) + "'"
@@ -83,6 +96,7 @@ func (q *QuickBooksFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 				req.Header.Set("Accept", "application/json")
 				return req, nil
 			})
+			requestCount++
 			if err != nil {
 				return poller.FetchResult{}, fmt.Errorf("quickbooks request failed: %w", err)
 			}
@@ -93,6 +107,7 @@ func (q *QuickBooksFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 			if err := json.Unmarshal(body, &out); err != nil {
 				return poller.FetchResult{}, fmt.Errorf("decode quickbooks response: %w", err)
 			}
+			pageCount++
 			qr := out.QueryResponse
 
 			pageRecords := 0
@@ -161,10 +176,22 @@ func (q *QuickBooksFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 			if len(seenEntityNames) > 1 {
 				break
 			}
+			if pageCount >= maxPages {
+				truncated = true
+				break
+			}
 			startPosition = nextPosition
 		}
 	}
 	q.AccessToken = token
 
-	return poller.FetchResult{Entities: entities, NextCheckpoint: formatCheckpoint(next, checkpoint)}, nil
+	return poller.FetchResult{
+		Entities:       entities,
+		NextCheckpoint: formatCheckpoint(next, checkpoint),
+		Stats: poller.FetchStats{
+			Requests:  requestCount,
+			Pages:     pageCount,
+			Truncated: truncated,
+		},
+	}, nil
 }

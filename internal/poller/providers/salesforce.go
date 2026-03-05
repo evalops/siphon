@@ -24,6 +24,8 @@ type SalesforceFetcher struct {
 	APIVersion   string
 	Objects      []string
 	QueryPerPage int
+	MaxPages     int
+	MaxRequests  int
 }
 
 func (s *SalesforceFetcher) ProviderName() string { return "salesforce" }
@@ -48,6 +50,10 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 	if limit <= 0 {
 		limit = 200
 	}
+	maxPages, maxRequests := normalizeFetchBudget(s.MaxPages, s.MaxRequests)
+	requestCount := 0
+	pageCount := 0
+	truncated := false
 
 	cp := parseCheckpoint(checkpoint)
 	next := cp
@@ -64,6 +70,9 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 	}
 
 	for _, object := range objects {
+		if truncated {
+			break
+		}
 		soql := fmt.Sprintf("SELECT Id, LastModifiedDate FROM %s", object)
 		if !cp.IsZero() {
 			soql += " WHERE LastModifiedDate > " + cp.UTC().Format("2006-01-02T15:04:05Z")
@@ -72,6 +81,10 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 
 		nextURL := base + "/services/data/" + apiVersion + "/query?q=" + url.QueryEscape(soql)
 		for nextURL != "" {
+			if requestCount >= maxRequests || pageCount >= maxPages {
+				truncated = true
+				break
+			}
 			body, err := doAuthenticatedRequest(ctx, client, &token, oauth, "salesforce", func(accessToken string) (*http.Request, error) {
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
 				if err != nil {
@@ -81,6 +94,7 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 				req.Header.Set("Accept", "application/json")
 				return req, nil
 			})
+			requestCount++
 			if err != nil {
 				return poller.FetchResult{}, fmt.Errorf("salesforce request failed: %w", err)
 			}
@@ -92,6 +106,7 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 			if err := json.Unmarshal(body, &out); err != nil {
 				return poller.FetchResult{}, fmt.Errorf("decode salesforce response: %w", err)
 			}
+			pageCount++
 
 			for _, rec := range out.Records {
 				id := toString(rec["Id"])
@@ -116,6 +131,10 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 
 			nextURL = ""
 			if strings.TrimSpace(out.NextRecordsURL) != "" {
+				if pageCount >= maxPages {
+					truncated = true
+					break
+				}
 				if strings.HasPrefix(out.NextRecordsURL, "http") {
 					nextURL = out.NextRecordsURL
 				} else {
@@ -126,5 +145,13 @@ func (s *SalesforceFetcher) Fetch(ctx context.Context, checkpoint string) (polle
 	}
 	s.AccessToken = token
 
-	return poller.FetchResult{Entities: entities, NextCheckpoint: formatCheckpoint(next, checkpoint)}, nil
+	return poller.FetchResult{
+		Entities:       entities,
+		NextCheckpoint: formatCheckpoint(next, checkpoint),
+		Stats: poller.FetchStats{
+			Requests:  requestCount,
+			Pages:     pageCount,
+			Truncated: truncated,
+		},
+	}, nil
 }

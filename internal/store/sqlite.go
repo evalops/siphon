@@ -10,6 +10,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const sqliteStateSchemaVersion = 1
+
+var sqliteStateMigrations = map[int][]string{
+	1: {
+		`CREATE TABLE IF NOT EXISTS checkpoints (
+			provider TEXT PRIMARY KEY,
+			checkpoint TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS snapshots (
+			provider TEXT NOT NULL,
+			entity_type TEXT NOT NULL,
+			entity_id TEXT NOT NULL,
+			snapshot_json TEXT NOT NULL,
+			PRIMARY KEY (provider, entity_type, entity_id)
+		)`,
+	},
+}
+
 type SQLiteStateStore struct {
 	db          *sql.DB
 	Checkpoints *SQLiteCheckpointStore
@@ -39,6 +57,11 @@ func NewSQLiteStateStore(path string) (*SQLiteStateStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxIdleTime(0)
+	db.SetConnMaxLifetime(0)
+
 	store := &SQLiteStateStore{
 		db:          db,
 		Checkpoints: &SQLiteCheckpointStore{db: db},
@@ -52,22 +75,66 @@ func NewSQLiteStateStore(path string) (*SQLiteStateStore, error) {
 }
 
 func (s *SQLiteStateStore) init() error {
-	schema := []string{
-		`CREATE TABLE IF NOT EXISTS checkpoints (
-			provider TEXT PRIMARY KEY,
-			checkpoint TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS snapshots (
-			provider TEXT NOT NULL,
-			entity_type TEXT NOT NULL,
-			entity_id TEXT NOT NULL,
-			snapshot_json TEXT NOT NULL,
-			PRIMARY KEY (provider, entity_type, entity_id)
-		)`,
+	if err := s.applyPragmas(); err != nil {
+		return err
 	}
-	for _, stmt := range schema {
+	if err := s.applyMigrations(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStateStore) applyPragmas() error {
+	pragmas := []string{
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = NORMAL`,
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA foreign_keys = ON`,
+	}
+	for _, stmt := range pragmas {
 		if _, err := s.db.Exec(stmt); err != nil {
-			return fmt.Errorf("init sqlite schema: %w", err)
+			return fmt.Errorf("apply sqlite pragma %q: %w", stmt, err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStateStore) applyMigrations() error {
+	var currentVersion int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&currentVersion); err != nil {
+		return fmt.Errorf("read sqlite schema version: %w", err)
+	}
+	if currentVersion >= sqliteStateSchemaVersion {
+		return nil
+	}
+
+	for version := currentVersion + 1; version <= sqliteStateSchemaVersion; version++ {
+		stmts, ok := sqliteStateMigrations[version]
+		if !ok {
+			return fmt.Errorf("missing sqlite migration for version %d", version)
+		}
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin sqlite migration %d: %w", version, err)
+		}
+		rolledBack := false
+		rollback := func(cause error) error {
+			if !rolledBack {
+				_ = tx.Rollback()
+				rolledBack = true
+			}
+			return cause
+		}
+		for _, stmt := range stmts {
+			if _, err := tx.Exec(stmt); err != nil {
+				return rollback(fmt.Errorf("apply sqlite migration %d statement: %w", version, err))
+			}
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+			return rollback(fmt.Errorf("set sqlite schema version %d: %w", version, err))
+		}
+		if err := tx.Commit(); err != nil {
+			return rollback(fmt.Errorf("commit sqlite migration %d: %w", version, err))
 		}
 	}
 	return nil

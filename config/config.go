@@ -53,6 +53,8 @@ type ProviderConfig struct {
 	PollFailureBudget    int                             `koanf:"poll_failure_budget"`
 	PollCircuitBreak     time.Duration                   `koanf:"poll_circuit_break_duration"`
 	PollJitterRatio      float64                         `koanf:"poll_jitter_ratio"`
+	PollMaxPages         int                             `koanf:"poll_max_pages"`
+	PollMaxRequests      int                             `koanf:"poll_max_requests"`
 	BaseURL              string                          `koanf:"base_url"`
 	AccessToken          string                          `koanf:"access_token"`
 	Objects              []string                        `koanf:"objects"`
@@ -86,6 +88,8 @@ type ProviderTenantConfig struct {
 	PollFailureBudget   int           `koanf:"poll_failure_budget"`
 	PollCircuitBreak    time.Duration `koanf:"poll_circuit_break_duration"`
 	PollJitterRatio     float64       `koanf:"poll_jitter_ratio"`
+	PollMaxPages        int           `koanf:"poll_max_pages"`
+	PollMaxRequests     int           `koanf:"poll_max_requests"`
 }
 
 type NATSConfig struct {
@@ -369,6 +373,13 @@ func validatePollProvider(providerName string, providerCfg ProviderConfig) error
 	}
 
 	for _, target := range targets {
+		if err := validatePollFetchBounds(target); err != nil {
+			targetScope := "base"
+			if tenantID := strings.TrimSpace(target.TenantID); tenantID != "" {
+				targetScope = fmt.Sprintf("tenant %q", tenantID)
+			}
+			return fmt.Errorf("providers.%s poll target %s is invalid: %w", providerName, targetScope, err)
+		}
 		var err error
 		switch providerName {
 		case "hubspot":
@@ -390,6 +401,16 @@ func validatePollProvider(providerName string, providerCfg ProviderConfig) error
 			targetScope = fmt.Sprintf("tenant %q", tenantID)
 		}
 		return fmt.Errorf("providers.%s poll target %s is invalid: %w", providerName, targetScope, err)
+	}
+	return nil
+}
+
+func validatePollFetchBounds(cfg ProviderConfig) error {
+	if cfg.PollMaxPages < 0 {
+		return fmt.Errorf("poll_max_pages must be greater than or equal to 0")
+	}
+	if cfg.PollMaxRequests < 0 {
+		return fmt.Errorf("poll_max_requests must be greater than or equal to 0")
 	}
 	return nil
 }

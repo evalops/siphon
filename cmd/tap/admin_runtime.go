@@ -452,6 +452,7 @@ type adminReplayJobSnapshot struct {
 	StartedAt      time.Time `json:"started_at,omitempty"`
 	CompletedAt    time.Time `json:"completed_at,omitempty"`
 	Replayed       int       `json:"replayed"`
+	RequestID      string    `json:"request_id,omitempty"`
 	OperatorReason string    `json:"operator_reason,omitempty"`
 	CancelReason   string    `json:"cancel_reason,omitempty"`
 	Error          string    `json:"error,omitempty"`
@@ -477,6 +478,7 @@ type adminReplayJobCreateMeta struct {
 	OperatorReason          string
 	CreatorIP               string
 	CreatorTokenFingerprint string
+	RequestID               string
 }
 
 type adminReplayJobRegistry struct {
@@ -593,6 +595,7 @@ func (r *adminReplayJobRegistry) GetOrCreateWithGuards(
 	meta.OperatorReason = strings.TrimSpace(meta.OperatorReason)
 	meta.CreatorIP = strings.TrimSpace(meta.CreatorIP)
 	meta.CreatorTokenFingerprint = strings.TrimSpace(meta.CreatorTokenFingerprint)
+	meta.RequestID = strings.TrimSpace(meta.RequestID)
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -623,6 +626,7 @@ func (r *adminReplayJobRegistry) GetOrCreateWithGuards(
 	base.Status = adminReplayJobStatusQueued
 	base.CreatedAt = now
 	base.OperatorReason = meta.OperatorReason
+	base.RequestID = meta.RequestID
 	job := &adminReplayJob{
 		snapshot:                base,
 		idempotencyKey:          idempotencyKey,

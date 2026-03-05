@@ -11,10 +11,15 @@ concurrency:
 
 env:
   GOTOOLCHAIN: go1.24.13
+  TOOLS_BIN: ${{ github.workspace }}/.cache/tools/bin
+  STATICCHECK_VERSION: v0.6.1
+  GOSEC_VERSION: v2.23.0
+  GOVULNCHECK_VERSION: v1.1.4
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,22 +29,17 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Download dependencies
-        run: go mod download
-
       - name: Vet
         run: go vet ./...
-
-      - name: Test
-        run: go test ./...
 
       - name: Coverage
         env:
           MIN_COVERAGE: "75"
         run: |
-          go test ./... -coverprofile=coverage.out
-          go tool cover -func=coverage.out
-          total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          go test ./... -covermode=atomic -coverprofile=coverage.out
+          coverage_report="$(go tool cover -func=coverage.out)"
+          echo "$coverage_report"
+          total="$(printf '%s\n' "$coverage_report" | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
           echo "Total coverage: ${total}% (minimum: ${MIN_COVERAGE}%)"
           awk -v got="$total" -v min="$MIN_COVERAGE" 'BEGIN { if (got+0 < min+0) { printf("coverage %.1f%% is below minimum %.1f%%\n", got, min); exit 1 } }'
 
@@ -51,6 +51,7 @@ jobs:
 
   staticcheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,11 +61,22 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Restore tool cache
+        id: staticcheck-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLS_BIN }}
+          key: staticcheck-${{ runner.os }}-${{ env.STATICCHECK_VERSION }}
+
       - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
+        if: steps.staticcheck-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${TOOLS_BIN}"
+          GOBIN="${TOOLS_BIN}" go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
 
       - name: Run staticcheck
-        run: $(go env GOPATH)/bin/staticcheck ./...
+        run: |
+          "${TOOLS_BIN}/staticcheck" ./...
 
   openapi-contract:
     runs-on: ubuntu-latest
@@ -109,6 +121,7 @@ jobs:
 
   security-gosec:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -118,14 +131,26 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Restore tool cache
+        id: gosec-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLS_BIN }}
+          key: gosec-${{ runner.os }}-${{ env.GOSEC_VERSION }}
+
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.23.0
+        if: steps.gosec-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${TOOLS_BIN}"
+          GOBIN="${TOOLS_BIN}" go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
 
       - name: Run gosec
-        run: $(go env GOPATH)/bin/gosec -exclude=G117 ./...
+        run: |
+          "${TOOLS_BIN}/gosec" -exclude=G117 ./...
 
   security-govulncheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -135,14 +160,28 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Restore tool cache
+        id: govulncheck-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLS_BIN }}
+          key: govulncheck-${{ runner.os }}-${{ env.GOVULNCHECK_VERSION }}
+
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        if: steps.govulncheck-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${TOOLS_BIN}"
+          GOBIN="${TOOLS_BIN}" go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       - name: Run govulncheck
-        run: $(go env GOPATH)/bin/govulncheck ./...
+        run: |
+          "${TOOLS_BIN}/govulncheck" ./...
 
   security-trivy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -154,6 +193,7 @@ jobs:
           scan-ref: .
           severity: CRITICAL
           ignore-unfixed: true
+          cache: 'true'
           version: v0.69.3
           exit-code: '1'
 
@@ -178,6 +218,7 @@ jobs:
 
   perf-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       TAP_SERVER_PORT: "18080"
     steps:
@@ -195,6 +236,18 @@ jobs:
       - name: Start NATS
         run: docker run -d --name tap-nats -p 4222:4222 nats:2.11-alpine -js
 
+      - name: Wait for NATS
+        run: |
+          for _ in $(seq 1 30); do
+            if (echo >/dev/tcp/127.0.0.1/4222) >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "nats failed to become ready" >&2
+          docker logs tap-nats >&2 || true
+          exit 1
+
       - name: Build tap
         run: go build -o ./bin/ensemble-tap ./cmd/tap
 
@@ -206,8 +259,13 @@ jobs:
       - name: Wait for readiness
         run: |
           for _ in $(seq 1 60); do
-            if curl -fsS "http://127.0.0.1:${TAP_SERVER_PORT}/livez" >/dev/null; then
+            if curl -fsS "http://127.0.0.1:${TAP_SERVER_PORT}/readyz" >/dev/null; then
               exit 0
+            fi
+            if [ -f /tmp/tap.pid ] && ! kill -0 "$(cat /tmp/tap.pid)" 2>/dev/null; then
+              echo "tap process exited before readiness" >&2
+              cat /tmp/tap.log >&2 || true
+              exit 1
             fi
             sleep 1
           done
@@ -238,6 +296,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4

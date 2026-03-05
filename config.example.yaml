@@ -22,6 +22,8 @@ providers:
     poll_interval: 60s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_max_pages: 200
+    poll_max_requests: 400
     poll_failure_budget: 6
     poll_circuit_break_duration: 45s
     poll_jitter_ratio: 0.15
@@ -33,6 +35,8 @@ providers:
         poll_interval: 30s
         poll_rate_limit_per_sec: 8
         poll_burst: 2
+        poll_max_pages: 100
+        poll_max_requests: 200
         poll_failure_budget: 8
         poll_circuit_break_duration: 60s
         poll_jitter_ratio: 0.25
@@ -51,6 +55,8 @@ providers:
     poll_interval: 60s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_max_pages: 200
+    poll_max_requests: 400
     poll_failure_budget: 5
     poll_circuit_break_duration: 30s
     poll_jitter_ratio: 0.1
@@ -69,6 +75,8 @@ providers:
     poll_interval: 120s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_max_pages: 200
+    poll_max_requests: 400
     poll_failure_budget: 5
     poll_circuit_break_duration: 30s
     poll_jitter_ratio: 0.1
@@ -85,6 +93,8 @@ providers:
     poll_interval: 120s
     poll_rate_limit_per_sec: 4
     poll_burst: 1
+    poll_max_pages: 200
+    poll_max_requests: 400
     poll_failure_budget: 5
     poll_circuit_break_duration: 30s
     poll_jitter_ratio: 0.1

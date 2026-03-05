@@ -302,7 +302,7 @@ func (s pollSink) recordDLQ(ctx context.Context, stage string, evt normalize.Nor
 	})
 }
 
-func startConfiguredPollers(ctx context.Context, cfg config.Config, publisher cloudEventPublisher, dlqPublisher *dlq.Publisher, logger *slog.Logger, checkpointStore store.CheckpointStore, snapshotStore store.SnapshotStore, statuses *pollerStatusRegistry) {
+func startConfiguredPollers(ctx context.Context, cfg config.Config, publisher cloudEventPublisher, dlqPublisher *dlq.Publisher, logger *slog.Logger, checkpointStore store.CheckpointStore, snapshotStore store.SnapshotStore, metrics *health.Metrics, statuses *pollerStatusRegistry) {
 	if checkpointStore == nil || snapshotStore == nil {
 		return
 	}
@@ -351,11 +351,31 @@ func startConfiguredPollers(ctx context.Context, cfg config.Config, publisher cl
 						checkpointBefore, _ := checkpointStore.Get(stateKey)
 						statusEntry.markRun(checkpointBefore)
 
-						err := poller.RunCycle(ctx, fetcher, checkpointStore, snapshotStore, sink, tenantID)
+						cycleStats, err := poller.RunCycleWithStats(ctx, fetcher, checkpointStore, snapshotStore, sink, tenantID)
 						checkpointAfter, _ := checkpointStore.Get(stateKey)
 						if err != nil {
 							statusEntry.markError(err, checkpointAfter)
 							return err
+						}
+						if metrics != nil {
+							provider := fetcher.ProviderName()
+							tenant := strings.TrimSpace(tenantID)
+							metrics.PollerFetchRequestsTotal.WithLabelValues(provider, tenant).Add(float64(cycleStats.Fetch.Requests))
+							metrics.PollerFetchPagesTotal.WithLabelValues(provider, tenant).Add(float64(cycleStats.Fetch.Pages))
+							if cycleStats.Fetch.Truncated {
+								metrics.PollerFetchTruncatedTotal.WithLabelValues(provider, tenant).Inc()
+							}
+						}
+						if cycleStats.Fetch.Truncated {
+							logger.Warn(
+								"poller fetch capped by budget",
+								"provider", fetcher.ProviderName(),
+								"tenant", tenantID,
+								"fetch_requests", cycleStats.Fetch.Requests,
+								"fetch_pages", cycleStats.Fetch.Pages,
+								"fetched_entities", cycleStats.FetchedEntities,
+								"published_entities", cycleStats.PublishedEntities,
+							)
 						}
 						statusEntry.markSuccess(checkpointAfter)
 						return nil
@@ -474,6 +494,8 @@ func fetcherForProvider(name string, cfg config.ProviderConfig) poller.Fetcher {
 			Scope:        cfg.Scope,
 			Objects:      cfg.Objects,
 			Limit:        cfg.QueryPerPage,
+			MaxPages:     cfg.PollMaxPages,
+			MaxRequests:  cfg.PollMaxRequests,
 		}
 	case "salesforce":
 		token := cfg.AccessToken
@@ -491,6 +513,8 @@ func fetcherForProvider(name string, cfg config.ProviderConfig) poller.Fetcher {
 			APIVersion:   cfg.APIVersion,
 			Objects:      cfg.Objects,
 			QueryPerPage: cfg.QueryPerPage,
+			MaxPages:     cfg.PollMaxPages,
+			MaxRequests:  cfg.PollMaxRequests,
 		}
 	case "quickbooks":
 		token := cfg.AccessToken
@@ -508,6 +532,8 @@ func fetcherForProvider(name string, cfg config.ProviderConfig) poller.Fetcher {
 			RealmID:      cfg.RealmID,
 			Entities:     cfg.Objects,
 			QueryPerPage: cfg.QueryPerPage,
+			MaxPages:     cfg.PollMaxPages,
+			MaxRequests:  cfg.PollMaxRequests,
 		}
 	case "notion":
 		token := cfg.AccessToken
@@ -523,6 +549,8 @@ func fetcherForProvider(name string, cfg config.ProviderConfig) poller.Fetcher {
 			RefreshToken: cfg.RefreshToken,
 			Scope:        cfg.Scope,
 			PageSize:     cfg.QueryPerPage,
+			MaxPages:     cfg.PollMaxPages,
+			MaxRequests:  cfg.PollMaxRequests,
 		}
 	default:
 		return nil
