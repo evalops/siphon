@@ -79,6 +79,8 @@ Run smoke test only (for an existing install):
 ```bash
 go test ./...
 go run ./cmd/tap -config ./config.yaml
+go run ./cmd/tap -config ./config.yaml -check-config
+./scripts/lint-config.sh
 make ci-local
 ```
 

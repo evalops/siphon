@@ -15,7 +15,9 @@ import (
 
 func main() {
 	var configPath string
+	var checkConfigOnly bool
 	flag.StringVar(&configPath, "config", "config.yaml", "Path to Tap config file")
+	flag.BoolVar(&checkConfigOnly, "check-config", false, "Validate config and exit")
 	flag.Parse()
 
 	logger := newLogger(os.Stdout)
@@ -26,6 +28,11 @@ func main() {
 	if err != nil {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
+	}
+	if checkConfigOnly {
+		logger.Info("config is valid", "path", configPath)
+		fmt.Println("config check passed")
+		return
 	}
 
 	if err := run(ctx, cfg, logger); err != nil {

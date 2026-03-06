@@ -3,9 +3,9 @@ MIN_COVERAGE ?= 75
 STATICCHECK_VERSION ?= v0.6.1
 STATICCHECK_BIN := $(shell $(GO) env GOPATH)/bin/staticcheck
 
-.PHONY: ci-local test race vet staticcheck staticcheck-install coverage openapi helm-lint helm-template onboard onboard-smoke
+.PHONY: ci-local test race vet staticcheck staticcheck-install coverage openapi config-lint helm-lint helm-template onboard onboard-smoke
 
-ci-local: vet test race staticcheck coverage openapi helm-lint helm-template
+ci-local: vet test race staticcheck coverage openapi config-lint helm-lint helm-template
 
 test:
 	$(GO) test ./...
@@ -31,6 +31,9 @@ coverage:
 
 openapi:
 	$(GO) test ./cmd/tap -run TestAdminOpenAPIContractMatchesRuntime -count=1
+
+config-lint:
+	./scripts/lint-config.sh
 
 helm-lint:
 	helm lint charts/ensemble-tap
