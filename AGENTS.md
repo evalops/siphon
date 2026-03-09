@@ -65,11 +65,14 @@ This file is the operating guide for coding agents working in `ensemble-tap`.
 - `test`: `go vet` + coverage threshold (minimum `75%`).
 - `staticcheck`
 - `openapi-contract`: `TestAdminOpenAPIContractMatchesRuntime`
+- `config-lint`: runtime/chart config lint + Helm render hardening assertions
 - `docker-build`
 - `helm-lint` + `helm template`
 - `integration`: real NATS + ClickHouse integration test
 - `perf-smoke`: k6 smoke against `/livez` and `/readyz`
 - `security`: `gosec`, `govulncheck`, Trivy CRITICAL scan, SBOM generation
+- `flake-tracker`: per-run `integration`/`perf-smoke` status + duration artifact trend
+- failed `main` runs auto-open a triage issue with failed job log snippets
 
 If your change affects behavior, assume at least one of these can fail and run the relevant subset locally before committing.
 
