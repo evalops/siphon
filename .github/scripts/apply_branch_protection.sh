@@ -25,6 +25,7 @@ cat >"$payload_file" <<JSON
       "CI / test",
       "CI / staticcheck",
       "CI / openapi-contract",
+      "CI / config-lint",
       "CI / docker-build",
       "CI / helm-lint",
       "CI / security-gosec",

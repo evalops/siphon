@@ -1,0 +1,140 @@
+name: Release Candidate Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref (branch, tag, or SHA) to validate
+        required: false
+        default: main
+      release_name:
+        description: Helm release name for smoke install
+        required: false
+        default: ensemble-tap
+      namespace:
+        description: Kubernetes namespace for smoke install
+        required: false
+        default: ensemble-rc
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: go1.26.1
+  TAP_IMAGE_REPO: ensemble-tap
+  NATS_IMAGE: nats:2.12.4-alpine
+
+jobs:
+  rc-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Setup kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: rc-smoke
+
+      - name: Build release-candidate image
+        env:
+          IMAGE_TAG: rc-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker build -t "${TAP_IMAGE_REPO}:${IMAGE_TAG}" .
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Load image into kind
+        run: kind load docker-image "${TAP_IMAGE_REPO}:${IMAGE_TAG}" --name rc-smoke
+
+      - name: Deploy NATS JetStream dependency
+        run: |
+          kubectl create namespace "${{ inputs.namespace }}" --dry-run=client -o yaml | kubectl apply -f -
+          cat <<MANIFEST | kubectl -n "${{ inputs.namespace }}" apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nats
+            labels:
+              app: nats
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: nats
+            template:
+              metadata:
+                labels:
+                  app: nats
+              spec:
+                containers:
+                  - name: nats
+                    image: ${NATS_IMAGE}
+                    args: ["-js"]
+                    ports:
+                      - name: client
+                        containerPort: 4222
+                      - name: monitor
+                        containerPort: 8222
+                    readinessProbe:
+                      tcpSocket:
+                        port: 4222
+                      initialDelaySeconds: 2
+                      periodSeconds: 2
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: nats
+          spec:
+            selector:
+              app: nats
+            ports:
+              - name: client
+                port: 4222
+                targetPort: client
+              - name: monitor
+                port: 8222
+                targetPort: monitor
+          MANIFEST
+          kubectl -n "${{ inputs.namespace }}" rollout status deployment/nats --timeout=120s
+
+      - name: Deploy ensemble-tap Helm release
+        env:
+          ONBOARDING_SECRET: rc-generic-secret
+        run: |
+          helm upgrade --install "${{ inputs.release_name }}" ./charts/ensemble-tap \
+            --namespace "${{ inputs.namespace }}" \
+            --set image.repository="${TAP_IMAGE_REPO}" \
+            --set image.tag="${IMAGE_TAG}" \
+            --set config.nats.url="nats://nats:4222" \
+            --set config.providers.generic.secret="${ONBOARDING_SECRET}" \
+            --wait --timeout 180s
+
+      - name: Validate /readyz + end-to-end publish path
+        env:
+          ONBOARDING_SECRET: rc-generic-secret
+        run: |
+          ./scripts/smoke-onboarding.sh \
+            --provider generic \
+            --secret "${ONBOARDING_SECRET}" \
+            --release "${{ inputs.release_name }}" \
+            --namespace "${{ inputs.namespace }}" \
+            --local-port 18080
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n "${{ inputs.namespace }}" get all
+          kubectl -n "${{ inputs.namespace }}" logs deploy/nats --tail=200 || true
+          kubectl -n "${{ inputs.namespace }}" logs deploy/${{ inputs.release_name }} --tail=200 || true
