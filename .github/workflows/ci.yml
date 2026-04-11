@@ -30,9 +30,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Vet
         run: go vet ./...
@@ -62,9 +63,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Restore tool cache
         if: env.DISABLE_TOOL_CACHE != 'true'
@@ -97,9 +99,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Verify admin OpenAPI contract
         run: go test ./cmd/tap -run TestAdminOpenAPIContractMatchesRuntime -count=1
@@ -112,9 +115,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Setup Helm
         uses: azure/setup-helm@v4
@@ -140,11 +144,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Build image
-        run: docker build .
+        uses: evalops/service-runtime/.github/actions/build-docker-image@d348819979602be3a2b8349b5dccd41488bb7cd2
+        with:
+          dockerfile: ./Dockerfile
+          tags: ensemble-tap:ci
 
   helm-lint:
     runs-on: ubuntu-latest
@@ -169,9 +173,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Restore tool cache
         if: env.DISABLE_TOOL_CACHE != 'true'
@@ -205,9 +210,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Restore tool cache
         if: env.DISABLE_TOOL_CACHE != 'true'
@@ -283,9 +289,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Setup k6
         uses: grafana/setup-k6-action@v1
@@ -359,9 +366,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
           go-version: "1.26.1"
+          download: "false"
 
       - name: Run secure NATS TLS/auth integration tests
         run: go test ./internal/publish -run 'TestNATSPublisherPublishesWith(TokenAuthOverTLS|UserPassOverTLS)' -count=1
