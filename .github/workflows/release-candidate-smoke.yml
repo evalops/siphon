@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  GOTOOLCHAIN: go1.26.1
+  GOTOOLCHAIN: go1.26.2
   TAP_IMAGE_REPO: ensemble-tap
   NATS_IMAGE: nats:2.12.4-alpine
 
@@ -37,7 +37,7 @@ jobs:
       - name: Setup Go
         uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
-          go-version: "1.26.1"
+          go-version: "1.26.2"
           download: "false"
 
       - name: Setup Helm
