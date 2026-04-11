@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  GOTOOLCHAIN: go1.26.1
+  GOTOOLCHAIN: go1.26.2
   TAP_IMAGE_REPO: ensemble-tap
   NATS_IMAGE: nats:2.12.4-alpine
 
@@ -35,9 +35,10 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: evalops/service-runtime/.github/actions/setup-go-service@d348819979602be3a2b8349b5dccd41488bb7cd2
         with:
-          go-version: "1.26.1"
+          go-version: "1.26.2"
+          download: "false"
 
       - name: Setup Helm
         uses: azure/setup-helm@v4
@@ -47,12 +48,15 @@ jobs:
         with:
           cluster_name: rc-smoke
 
+      - name: Set image tag
+        run: echo "IMAGE_TAG=rc-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_ENV"
+
       - name: Build release-candidate image
-        env:
-          IMAGE_TAG: rc-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          docker build -t "${TAP_IMAGE_REPO}:${IMAGE_TAG}" .
-          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+        uses: evalops/service-runtime/.github/actions/build-docker-image@d348819979602be3a2b8349b5dccd41488bb7cd2
+        with:
+          dockerfile: ./Dockerfile
+          tags: ${{ env.TAP_IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+          load: "true"
 
       - name: Load image into kind
         run: kind load docker-image "${TAP_IMAGE_REPO}:${IMAGE_TAG}" --name rc-smoke
