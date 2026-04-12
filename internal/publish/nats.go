@@ -159,8 +159,8 @@ func (p *NATSPublisher) Publish(ctx context.Context, event cloudevents.Event, de
 		return "", err
 	}
 
-	var data normalize.TapEventData
-	if err := event.DataAs(&data); err != nil {
+	data, err := normalize.DecodeTapEventData(event)
+	if err != nil {
 		return "", fmt.Errorf("decode cloudevent data: %w", err)
 	}
 	subject := normalize.BuildSubjectWithTenant(p.cfg.SubjectPrefix, data.TenantID, data.Provider, data.EntityType, data.Action, p.cfg.TenantScopedSubjects)
@@ -297,8 +297,8 @@ func requestIDFromCloudEvent(event cloudevents.Event) string {
 			}
 		}
 	}
-	var data normalize.TapEventData
-	if err := event.DataAs(&data); err != nil {
+	data, err := normalize.DecodeTapEventData(event)
+	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(data.RequestID)

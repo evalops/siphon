@@ -32,9 +32,12 @@ func TestToCloudEvent(t *testing.T) {
 	if evt.Subject() != "deal/12345" {
 		t.Fatalf("unexpected subject: %s", evt.Subject())
 	}
+	if evt.DataContentType() != TapProtoContentType {
+		t.Fatalf("unexpected data content type: %s", evt.DataContentType())
+	}
 
-	var data TapEventData
-	if err := evt.DataAs(&data); err != nil {
+	data, err := DecodeTapEventData(evt)
+	if err != nil {
 		t.Fatalf("decode data: %v", err)
 	}
 	if data.Provider != "hubspot" || data.EntityType != "deal" || data.Action != "updated" {

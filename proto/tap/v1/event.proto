@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package tap.v1;
+
+option go_package = "github.com/evalops/ensemble-tap/proto/tap/v1;tapv1";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+message FieldChange {
+  google.protobuf.Value from = 1;
+  google.protobuf.Value to = 2;
+}
+
+message TapEventData {
+  string provider = 1;
+  string entity_type = 2;
+  string entity_id = 3;
+  string action = 4;
+  map<string, FieldChange> changes = 5;
+  google.protobuf.Struct snapshot = 6;
+  string provider_event_id = 7;
+  string provider_timestamp = 8;
+  string tenant_id = 9;
+  string request_id = 10;
+}
+
+message NormalizedEvent {
+  string provider = 1;
+  string entity_type = 2;
+  string entity_id = 3;
+  string action = 4;
+  string provider_event_id = 5;
+  google.protobuf.Timestamp provider_time = 6;
+  string tenant_id = 7;
+  string request_id = 8;
+  map<string, FieldChange> changes = 9;
+  google.protobuf.Struct snapshot = 10;
+}

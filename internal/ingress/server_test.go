@@ -100,8 +100,8 @@ func TestServerAcceptsGenericWebhook(t *testing.T) {
 		t.Fatalf("unexpected response request id header: %q", got)
 	}
 
-	var data normalize.TapEventData
-	if err := pub.lastEvent.DataAs(&data); err != nil {
+	data, err := normalize.DecodeTapEventData(pub.lastEvent)
+	if err != nil {
 		t.Fatalf("decode cloud event data: %v", err)
 	}
 	if data.RequestID != "req-ingress-1" {
@@ -315,8 +315,8 @@ func TestServerAcceptsGitHubWebhookAfterBodyRead(t *testing.T) {
 		t.Fatalf("expected github delivery id as dedup id, got %q", pub.lastDedup)
 	}
 
-	var data normalize.TapEventData
-	if err := pub.lastEvent.DataAs(&data); err != nil {
+	data, err := normalize.DecodeTapEventData(pub.lastEvent)
+	if err != nil {
 		t.Fatalf("decode cloud event data: %v", err)
 	}
 	if data.Provider != "github" || data.EntityType != "issues" || data.Action != "opened" {

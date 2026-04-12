@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	cloudeventsevent "github.com/cloudevents/sdk-go/v2/event"
 	"github.com/evalops/ensemble-tap/config"
 	"github.com/evalops/ensemble-tap/internal/health"
 	"github.com/evalops/ensemble-tap/internal/normalize"
@@ -73,6 +74,25 @@ func TestNATSPublisherPublishesAndDeduplicates(t *testing.T) {
 	}
 	if info.State.Msgs != 1 {
 		t.Fatalf("expected 1 stored message after dedup, got %d", info.State.Msgs)
+	}
+
+	stored, err := pub.js.GetMsg(cfg.Stream, 1)
+	if err != nil {
+		t.Fatalf("get stored message: %v", err)
+	}
+	var storedEvent cloudeventsevent.Event
+	if err := json.Unmarshal(stored.Data, &storedEvent); err != nil {
+		t.Fatalf("decode stored cloud event: %v", err)
+	}
+	if storedEvent.DataContentType() != normalize.TapProtoContentType {
+		t.Fatalf("expected stored event content type %q, got %q", normalize.TapProtoContentType, storedEvent.DataContentType())
+	}
+	storedData, err := normalize.DecodeTapEventData(storedEvent)
+	if err != nil {
+		t.Fatalf("decode stored tap event data: %v", err)
+	}
+	if storedData.Provider != "stripe" || storedData.EntityType != "invoice" || storedData.Action != "paid" {
+		t.Fatalf("unexpected stored tap event data: %+v", storedData)
 	}
 
 	if err := pub.Ready(); err != nil {

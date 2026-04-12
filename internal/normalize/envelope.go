@@ -91,7 +91,11 @@ func ToCloudEvent(in NormalizedEvent) (cloudevents.Event, error) {
 	if !in.ProviderTime.IsZero() {
 		data.ProviderTimestamp = in.ProviderTime.UTC().Format(time.RFC3339Nano)
 	}
-	if err := e.SetData(cloudevents.ApplicationJSON, data); err != nil {
+	encodedData, err := EncodeTapEventData(data)
+	if err != nil {
+		return cloudevents.Event{}, fmt.Errorf("encode tap event data: %w", err)
+	}
+	if err := e.SetData(TapProtoContentType, encodedData); err != nil {
 		return cloudevents.Event{}, fmt.Errorf("set cloudevent data: %w", err)
 	}
 	if err := ValidateCloudEvent(e); err != nil {
