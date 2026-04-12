@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -88,10 +89,10 @@ func (s *tapAdminConnectServer) ListReplayJobs(ctx context.Context, req *connect
 	resp := connect.NewResponse(&tapv1.ListReplayJobsResponse{
 		RequestId:  payload.RequestID,
 		Status:     replayJobStatusFromString(payload.Status),
-		Limit:      int32(payload.Limit),
+		Limit:      safeInt32(payload.Limit),
 		Cursor:     payload.Cursor,
 		NextCursor: payload.NextCursor,
-		Count:      int32(payload.Count),
+		Count:      safeInt32(payload.Count),
 		Summary:    replayJobSummaryToProto(payload.Summary),
 		Jobs:       replayJobsToProto(payload.Jobs),
 	})
@@ -190,7 +191,7 @@ func (s *tapAdminConnectServer) GetPollerStatus(ctx context.Context, req *connec
 		RequestId:   payload.RequestID,
 		Provider:    payload.Provider,
 		Tenant:      payload.Tenant,
-		Count:       int32(payload.Count),
+		Count:       safeInt32(payload.Count),
 		Pollers:     pollerStatusesToProto(payload.Pollers),
 	})
 	copyAdminResponseHeaders(resp.Header(), headers)
@@ -323,15 +324,15 @@ func replayJobToProto(job adminReplayJobSnapshot) *tapv1.ReplayJob {
 	return &tapv1.ReplayJob{
 		JobId:          job.JobID,
 		Status:         replayJobStatusFromString(job.Status),
-		RequestedLimit: int32(job.RequestedLimit),
-		EffectiveLimit: int32(job.EffectiveLimit),
-		MaxLimit:       int32(job.MaxLimit),
+		RequestedLimit: safeInt32(job.RequestedLimit),
+		EffectiveLimit: safeInt32(job.EffectiveLimit),
+		MaxLimit:       safeInt32(job.MaxLimit),
 		Capped:         job.Capped,
 		DryRun:         job.DryRun,
 		CreatedAt:      timestampOrNil(job.CreatedAt),
 		StartedAt:      timestampOrNil(job.StartedAt),
 		CompletedAt:    timestampOrNil(job.CompletedAt),
-		Replayed:       int32(job.Replayed),
+		Replayed:       safeInt32(job.Replayed),
 		RequestId:      job.RequestID,
 		OperatorReason: job.OperatorReason,
 		CancelReason:   job.CancelReason,
@@ -359,7 +360,7 @@ func replayJobSummaryToProto(summary map[string]int) []*tapv1.ReplayJobStatusCou
 		if !ok {
 			continue
 		}
-		out = append(out, &tapv1.ReplayJobStatusCount{Status: status, Count: int32(count)})
+		out = append(out, &tapv1.ReplayJobStatusCount{Status: status, Count: safeInt32(count)})
 	}
 	var unknown []string
 	for key := range summary {
@@ -371,7 +372,7 @@ func replayJobSummaryToProto(summary map[string]int) []*tapv1.ReplayJobStatusCou
 	for _, key := range unknown {
 		out = append(out, &tapv1.ReplayJobStatusCount{
 			Status: tapv1.ReplayJobStatus_REPLAY_JOB_STATUS_UNSPECIFIED,
-			Count:  int32(summary[key]),
+			Count:  safeInt32(summary[key]),
 		})
 	}
 	return out
@@ -385,8 +386,8 @@ func pollerStatusesToProto(statuses []pollerStatusSnapshot) []*tapv1.PollerStatu
 			TenantId:             status.TenantID,
 			Interval:             status.Interval,
 			RateLimitPerSec:      status.RateLimitPerSec,
-			Burst:                int32(status.Burst),
-			FailureBudget:        int32(status.FailureBudget),
+			Burst:                safeInt32(status.Burst),
+			FailureBudget:        safeInt32(status.FailureBudget),
 			CircuitBreakDuration: status.CircuitBreak,
 			JitterRatio:          status.JitterRatio,
 			LastRunAt:            timestampOrNil(status.LastRunAt),
@@ -394,10 +395,20 @@ func pollerStatusesToProto(statuses []pollerStatusSnapshot) []*tapv1.PollerStatu
 			LastErrorAt:          timestampOrNil(status.LastErrorAt),
 			LastError:            status.LastError,
 			LastCheckpoint:       status.LastCheckpoint,
-			ConsecutiveFailures:  int32(status.ConsecutiveFailures),
+			ConsecutiveFailures:  safeInt32(status.ConsecutiveFailures),
 		})
 	}
 	return out
+}
+
+func safeInt32(value int) int32 {
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if value < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(value)
 }
 
 func timestampOrNil(value time.Time) *timestamppb.Timestamp {
