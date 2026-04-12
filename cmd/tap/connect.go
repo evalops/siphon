@@ -74,7 +74,7 @@ func (s *tapAdminConnectServer) ListReplayJobs(ctx context.Context, req *connect
 		query.Set("cursor", cursor)
 	}
 
-	headers, body, status, err := s.doAdminJSON(ctx, req.Header(), http.MethodGet, "/admin/replay-dlq", query, nil)
+	headers, body, status, err := s.doAdminJSON(ctx, req.Peer(), req.Header(), http.MethodGet, "/admin/replay-dlq", query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (s *tapAdminConnectServer) EnqueueReplayJob(ctx context.Context, req *conne
 		extraHeaders.Set("X-Admin-Reason", adminReason)
 	}
 
-	headers, body, status, err := s.doAdminJSON(ctx, req.Header(), http.MethodPost, "/admin/replay-dlq", query, extraHeaders)
+	headers, body, status, err := s.doAdminJSON(ctx, req.Peer(), req.Header(), http.MethodPost, "/admin/replay-dlq", query, extraHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (s *tapAdminConnectServer) GetReplayJob(ctx context.Context, req *connect.R
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("job_id is required"))
 	}
 
-	headers, body, status, err := s.doAdminJSON(ctx, req.Header(), http.MethodGet, "/admin/replay-dlq/"+url.PathEscape(jobID), nil, nil)
+	headers, body, status, err := s.doAdminJSON(ctx, req.Peer(), req.Header(), http.MethodGet, "/admin/replay-dlq/"+url.PathEscape(jobID), nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func (s *tapAdminConnectServer) CancelReplayJob(ctx context.Context, req *connec
 		extraHeaders.Set("X-Admin-Reason", adminReason)
 	}
 
-	headers, body, status, err := s.doAdminJSON(ctx, req.Header(), http.MethodDelete, "/admin/replay-dlq/"+url.PathEscape(jobID), nil, extraHeaders)
+	headers, body, status, err := s.doAdminJSON(ctx, req.Peer(), req.Header(), http.MethodDelete, "/admin/replay-dlq/"+url.PathEscape(jobID), nil, extraHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (s *tapAdminConnectServer) GetPollerStatus(ctx context.Context, req *connec
 		query.Set("tenant", tenant)
 	}
 
-	headers, body, status, err := s.doAdminJSON(ctx, req.Header(), http.MethodGet, "/admin/poller-status", query, nil)
+	headers, body, status, err := s.doAdminJSON(ctx, req.Peer(), req.Header(), http.MethodGet, "/admin/poller-status", query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +198,7 @@ func (s *tapAdminConnectServer) GetPollerStatus(ctx context.Context, req *connec
 	return resp, nil
 }
 
-func (s *tapAdminConnectServer) doAdminJSON(ctx context.Context, sourceHeaders http.Header, method, path string, query url.Values, extraHeaders http.Header) (http.Header, []byte, int, error) {
+func (s *tapAdminConnectServer) doAdminJSON(ctx context.Context, peer connect.Peer, sourceHeaders http.Header, method, path string, query url.Values, extraHeaders http.Header) (http.Header, []byte, int, error) {
 	target := &url.URL{Path: path}
 	if len(query) > 0 {
 		target.RawQuery = query.Encode()
@@ -208,7 +208,8 @@ func (s *tapAdminConnectServer) doAdminJSON(ctx context.Context, sourceHeaders h
 		return nil, nil, 0, connect.NewError(connect.CodeInternal, fmt.Errorf("build admin request: %w", err))
 	}
 	copyHTTPHeaders(httpReq.Header, sourceHeaders)
-	copyHTTPHeaders(httpReq.Header, extraHeaders)
+	setHTTPHeaders(httpReq.Header, extraHeaders)
+	httpReq.RemoteAddr = peer.Addr
 
 	recorder := httptest.NewRecorder()
 	s.adminMux.ServeHTTP(recorder, httpReq)
@@ -264,6 +265,15 @@ func decodeCancelReplayJobResponse(headers http.Header, body []byte) (*connect.R
 
 func copyHTTPHeaders(dst, src http.Header) {
 	for key, values := range src {
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func setHTTPHeaders(dst, src http.Header) {
+	for key, values := range src {
+		dst.Del(key)
 		for _, value := range values {
 			dst.Add(key, value)
 		}

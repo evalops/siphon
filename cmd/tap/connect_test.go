@@ -331,6 +331,60 @@ func TestTapAdminConnectPreservesAllowlistAndMTLS(t *testing.T) {
 	}
 }
 
+func TestTapAdminDoAdminJSONPreservesPeerAndOverridesExtraHeaders(t *testing.T) {
+	var gotReason string
+	var gotIdempotencyKey string
+	var gotRemoteAddr string
+
+	server := tapAdminConnectServer{
+		adminMux: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotReason = r.Header.Get("X-Admin-Reason")
+			gotIdempotencyKey = r.Header.Get("Idempotency-Key")
+			gotRemoteAddr = r.RemoteAddr
+			w.Header().Set("X-Request-ID", "connect-unit-1")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{}`))
+		}),
+	}
+
+	sourceHeaders := http.Header{}
+	sourceHeaders.Set("X-Admin-Reason", "from-header")
+	sourceHeaders.Set("Idempotency-Key", "from-header")
+	sourceHeaders.Set("X-Admin-Token", "test-admin-token")
+
+	extraHeaders := http.Header{}
+	extraHeaders.Set("X-Admin-Reason", "from-field")
+	extraHeaders.Set("Idempotency-Key", "from-field")
+
+	headers, _, status, err := server.doAdminJSON(
+		context.Background(),
+		connect.Peer{Addr: "198.51.100.10:4567"},
+		sourceHeaders,
+		http.MethodPost,
+		"/admin/replay-dlq",
+		nil,
+		extraHeaders,
+	)
+	if err != nil {
+		t.Fatalf("doAdminJSON returned error: %v", err)
+	}
+	if status != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d", status)
+	}
+	if gotReason != "from-field" {
+		t.Fatalf("expected extra admin reason to override header, got %q", gotReason)
+	}
+	if gotIdempotencyKey != "from-field" {
+		t.Fatalf("expected extra idempotency key to override header, got %q", gotIdempotencyKey)
+	}
+	if gotRemoteAddr != "198.51.100.10:4567" {
+		t.Fatalf("expected remote addr to be preserved, got %q", gotRemoteAddr)
+	}
+	if headers.Get("X-Request-ID") != "connect-unit-1" {
+		t.Fatalf("expected response request id to propagate, got %q", headers.Get("X-Request-ID"))
+	}
+}
+
 func newTapAdminConnectClient(baseURL string) tapv1connect.TapAdminServiceClient {
 	return tapv1connect.NewTapAdminServiceClient(http.DefaultClient, baseURL)
 }
