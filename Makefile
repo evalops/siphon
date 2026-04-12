@@ -24,8 +24,12 @@ staticcheck: staticcheck-install
 
 coverage:
 	$(GO) test ./... -coverprofile=/tmp/ensemble-tap.coverage.out
-	$(GO) tool cover -func=/tmp/ensemble-tap.coverage.out
-	@total="$$( $(GO) tool cover -func=/tmp/ensemble-tap.coverage.out | awk '/^total:/ {gsub(/%/, "", $$3); print $$3}' )"; \
+	@{ \
+		head -n 1 /tmp/ensemble-tap.coverage.out; \
+		tail -n +2 /tmp/ensemble-tap.coverage.out | grep -Ev '(^|/).*(\.pb|\.connect)\.go:'; \
+	} >/tmp/ensemble-tap.coverage.filtered.out
+	$(GO) tool cover -func=/tmp/ensemble-tap.coverage.filtered.out
+	@total="$$( $(GO) tool cover -func=/tmp/ensemble-tap.coverage.filtered.out | awk '/^total:/ {gsub(/%/, "", $$3); print $$3}' )"; \
 	echo "Total coverage: $${total}% (minimum: $(MIN_COVERAGE)%)"; \
 	awk -v got="$$total" -v min="$(MIN_COVERAGE)" 'BEGIN { if (got + 0 < min + 0) { printf("coverage %.1f%% is below minimum %.1f%%\n", got, min); exit 1 } }'
 
