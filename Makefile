@@ -3,7 +3,7 @@ MIN_COVERAGE ?= 75
 STATICCHECK_VERSION ?= v0.6.1
 STATICCHECK_BIN := $(shell $(GO) env GOPATH)/bin/staticcheck
 
-.PHONY: ci-local test race vet staticcheck staticcheck-install coverage openapi config-lint chart-assert helm-lint helm-template onboard onboard-smoke
+.PHONY: ci-local test race vet staticcheck staticcheck-install coverage openapi proto config-lint chart-assert helm-lint helm-template onboard onboard-smoke
 
 ci-local: vet test race staticcheck coverage openapi config-lint chart-assert helm-lint helm-template
 
@@ -24,13 +24,20 @@ staticcheck: staticcheck-install
 
 coverage:
 	$(GO) test ./... -coverprofile=/tmp/ensemble-tap.coverage.out
-	$(GO) tool cover -func=/tmp/ensemble-tap.coverage.out
-	@total="$$( $(GO) tool cover -func=/tmp/ensemble-tap.coverage.out | awk '/^total:/ {gsub(/%/, "", $$3); print $$3}' )"; \
+	@{ \
+		head -n 1 /tmp/ensemble-tap.coverage.out; \
+		tail -n +2 /tmp/ensemble-tap.coverage.out | grep -Ev '(^|/).*(\.pb|\.connect)\.go:'; \
+	} >/tmp/ensemble-tap.coverage.filtered.out
+	$(GO) tool cover -func=/tmp/ensemble-tap.coverage.filtered.out
+	@total="$$( $(GO) tool cover -func=/tmp/ensemble-tap.coverage.filtered.out | awk '/^total:/ {gsub(/%/, "", $$3); print $$3}' )"; \
 	echo "Total coverage: $${total}% (minimum: $(MIN_COVERAGE)%)"; \
 	awk -v got="$$total" -v min="$(MIN_COVERAGE)" 'BEGIN { if (got + 0 < min + 0) { printf("coverage %.1f%% is below minimum %.1f%%\n", got, min); exit 1 } }'
 
 openapi:
 	$(GO) test ./cmd/tap -run TestAdminOpenAPIContractMatchesRuntime -count=1
+
+proto:
+	buf generate
 
 config-lint:
 	./scripts/lint-config.sh

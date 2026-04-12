@@ -43,6 +43,11 @@ jobs:
           MIN_COVERAGE: "75"
         run: |
           go test ./... -covermode=atomic -coverprofile=coverage.out
+          {
+            head -n 1 coverage.out
+            tail -n +2 coverage.out | grep -Ev '(^|/).*(\.pb|\.connect)\.go:'
+          } > coverage.filtered.out
+          mv coverage.filtered.out coverage.out
           coverage_report="$(go tool cover -func=coverage.out)"
           echo "$coverage_report"
           total="$(printf '%s\n' "$coverage_report" | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
