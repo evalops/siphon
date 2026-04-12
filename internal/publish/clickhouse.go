@@ -317,8 +317,8 @@ func eventToRow(payload []byte) (clickhouseRow, error) {
 	if err := json.Unmarshal(payload, &ce); err != nil {
 		return clickhouseRow{}, fmt.Errorf("decode cloud event: %w", err)
 	}
-	var data normalize.TapEventData
-	if err := ce.DataAs(&data); err != nil {
+	data, err := normalize.DecodeTapEventData(ce)
+	if err != nil {
 		return clickhouseRow{}, fmt.Errorf("decode cloud event data: %w", err)
 	}
 

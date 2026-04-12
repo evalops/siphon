@@ -59,6 +59,35 @@ func TestEventToRowMapsCloudEventFields(t *testing.T) {
 	}
 }
 
+func TestEventToRowSupportsLegacyJSONCloudEventData(t *testing.T) {
+	evt := cloudevents.NewEvent()
+	evt.SetSpecVersion(cloudevents.VersionV1)
+	evt.SetID("evt_legacy_json")
+	evt.SetType("ensemble.tap.acme.deal.updated")
+	evt.SetSource("tap/acme/default")
+	evt.SetSubject("deal/1")
+	evt.SetTime(time.Date(2026, 3, 3, 14, 22, 0, 0, time.UTC))
+	if err := evt.SetData(cloudevents.ApplicationJSON, normalize.TapEventData{
+		Provider:        "acme",
+		EntityType:      "deal",
+		EntityID:        "1",
+		Action:          "updated",
+		ProviderEventID: "legacy-1",
+		TenantID:        "tenant-legacy",
+	}); err != nil {
+		t.Fatalf("set legacy event data: %v", err)
+	}
+
+	payload, _ := json.Marshal(evt)
+	row, err := eventToRow(payload)
+	if err != nil {
+		t.Fatalf("eventToRow failed for legacy json event: %v", err)
+	}
+	if row.Provider != "acme" || row.ProviderEventID != "legacy-1" {
+		t.Fatalf("unexpected row mapping from legacy event: %+v", row)
+	}
+}
+
 func TestEventToRowUsesCurrentTimeWhenCloudEventTimeMissing(t *testing.T) {
 	evt := cloudevents.NewEvent()
 	evt.SetSpecVersion(cloudevents.VersionV1)

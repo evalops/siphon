@@ -40,8 +40,8 @@ func ValidateCloudEvent(event cloudevents.Event) error {
 		return fmt.Errorf("source is required")
 	}
 
-	var data TapEventData
-	if err := event.DataAs(&data); err != nil {
+	data, err := DecodeTapEventData(event)
+	if err != nil {
 		return fmt.Errorf("invalid data payload: %w", err)
 	}
 	if strings.TrimSpace(data.Provider) == "" {
