@@ -22,8 +22,8 @@ providers:
     secret: ${STRIPE_WEBHOOK_SECRET}
 nats:
   url: nats://localhost:4222
-  stream: ENSEMBLE_TAP
-  subject_prefix: ensemble.tap
+  stream: SIPHON
+  subject_prefix: siphon.tap
   max_age: 168h
   dedup_window: 2m
 server:
@@ -62,7 +62,7 @@ func TestLoadConfigMissingFileAppliesDefaults(t *testing.T) {
 	if cfg.NATS.URL != "nats://localhost:4222" {
 		t.Fatalf("expected default nats url, got %q", cfg.NATS.URL)
 	}
-	if cfg.NATS.Stream != "ENSEMBLE_TAP" {
+	if cfg.NATS.Stream != "SIPHON" {
 		t.Fatalf("expected default stream, got %q", cfg.NATS.Stream)
 	}
 	if cfg.NATS.ConnectTimeout != 5*time.Second {
@@ -247,7 +247,7 @@ func TestLoadConfigResolvesVaultReferencesWithKubernetesAuth(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if payload["role"] != "ensemble-tap-runtime" {
+			if payload["role"] != "siphon-runtime" {
 				t.Errorf("unexpected vault kubernetes role: %q", payload["role"])
 			}
 			if payload["jwt"] != "k8s-jwt-token" {
@@ -258,7 +258,7 @@ func TestLoadConfigResolvesVaultReferencesWithKubernetesAuth(t *testing.T) {
 					"client_token": "vault-runtime-token",
 				},
 			})
-		case r.URL.Path == "/v1/secret/data/homelab/ensemble-tap/runtime":
+		case r.URL.Path == "/v1/secret/data/homelab/siphon/runtime":
 			readCalls.Add(1)
 			if got := r.Header.Get("X-Vault-Token"); got != "vault-runtime-token" {
 				t.Errorf("unexpected vault token header: %q", got)
@@ -289,18 +289,18 @@ func TestLoadConfigResolvesVaultReferencesWithKubernetesAuth(t *testing.T) {
 vault:
   address: ` + server.URL + `
   auth_method: kubernetes
-  kubernetes_role: ensemble-tap-runtime
+  kubernetes_role: siphon-runtime
   kubernetes_mount_path: kubernetes
   kubernetes_jwt_file: ` + jwtPath + `
 providers:
   generic:
     mode: webhook
-    secret: 'vault://secret/data/homelab/ensemble-tap/runtime#generic-webhook-secret'
+    secret: 'vault://secret/data/homelab/siphon/runtime#generic-webhook-secret'
 clickhouse:
   addr: clickhouse:9000
-  password: 'vault://secret/data/homelab/ensemble-tap/runtime#clickhouse-password'
+  password: 'vault://secret/data/homelab/siphon/runtime#clickhouse-password'
 server:
-  admin_token: 'vault://secret/data/homelab/ensemble-tap/runtime#admin-token'
+  admin_token: 'vault://secret/data/homelab/siphon/runtime#admin-token'
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -339,7 +339,7 @@ vault:
 providers:
   generic:
     mode: webhook
-    secret: 'vault://secret/data/homelab/ensemble-tap/runtime#generic-webhook-secret'
+    secret: 'vault://secret/data/homelab/siphon/runtime#generic-webhook-secret'
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -359,7 +359,7 @@ func TestLoadConfigResolvesVaultReferencesWithTokenAuth(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != "/v1/secret/data/homelab/ensemble-tap/runtime" {
+		if r.URL.Path != "/v1/secret/data/homelab/siphon/runtime" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -387,7 +387,7 @@ vault:
 providers:
   generic:
     mode: webhook
-    secret: 'vault://secret/data/homelab/ensemble-tap/runtime'
+    secret: 'vault://secret/data/homelab/siphon/runtime'
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -408,7 +408,7 @@ providers:
 func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.yaml")
 
-	t.Setenv("TAP_NATS_SUBJECT_PREFIX", "ensemble.tap.custom")
+	t.Setenv("TAP_NATS_SUBJECT_PREFIX", "siphon.custom")
 	t.Setenv("TAP_NATS_CONNECT_TIMEOUT", "9s")
 	t.Setenv("TAP_NATS_MAX_RECONNECTS", "12")
 	t.Setenv("TAP_NATS_PUBLISH_MAX_RETRIES", "7")
@@ -446,7 +446,7 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	t.Setenv("TAP_VAULT_NAMESPACE", "homelab")
 	t.Setenv("TAP_VAULT_AUTH_METHOD", "token")
 	t.Setenv("TAP_VAULT_TOKEN_FILE", "/var/run/secrets/vault/token")
-	t.Setenv("TAP_VAULT_KUBERNETES_ROLE", "ensemble-tap-runtime")
+	t.Setenv("TAP_VAULT_KUBERNETES_ROLE", "siphon-runtime")
 	t.Setenv("TAP_VAULT_KUBERNETES_MOUNT_PATH", "kubernetes-homelab")
 	t.Setenv("TAP_VAULT_KUBERNETES_JWT_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 	t.Setenv("TAP_PROVIDERS_STRIPE_SECRET", "whsec_env")
@@ -457,7 +457,7 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.NATS.SubjectPrefix != "ensemble.tap.custom" {
+	if cfg.NATS.SubjectPrefix != "siphon.custom" {
 		t.Fatalf("expected nats.subject_prefix override, got %q", cfg.NATS.SubjectPrefix)
 	}
 	if cfg.NATS.ConnectTimeout != 9*time.Second {
@@ -568,7 +568,7 @@ func TestLoadConfigSnakeCaseEnvOverrides(t *testing.T) {
 	if cfg.Vault.TokenFile != "/var/run/secrets/vault/token" {
 		t.Fatalf("expected vault.token_file override, got %q", cfg.Vault.TokenFile)
 	}
-	if cfg.Vault.KubernetesRole != "ensemble-tap-runtime" {
+	if cfg.Vault.KubernetesRole != "siphon-runtime" {
 		t.Fatalf("expected vault.kubernetes_role override, got %q", cfg.Vault.KubernetesRole)
 	}
 	if cfg.Vault.KubernetesMountPath != "kubernetes-homelab" {
@@ -792,8 +792,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap.>",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.>",
 				},
 			},
 			wantErrSub: "nats.subject_prefix",
@@ -803,8 +803,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 					MaxAge:        time.Minute,
 					DedupWindow:   2 * time.Minute,
 				},
@@ -816,8 +816,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 					Password:      "secret",
 				},
 			},
@@ -828,8 +828,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 					CredsFile:     "/tmp/nats.creds",
 					Token:         "nats-token",
 				},
@@ -841,8 +841,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "http://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 			},
 			wantErrSub: "unsupported scheme",
@@ -852,8 +852,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222,",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 			},
 			wantErrSub: "contains empty endpoint",
@@ -863,8 +863,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:70000",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 			},
 			wantErrSub: "invalid port",
@@ -874,8 +874,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:                "nats://localhost:4222",
-					Stream:             "ENSEMBLE_TAP",
-					SubjectPrefix:      "ensemble.tap",
+					Stream:             "SIPHON",
+					SubjectPrefix: "siphon.tap",
 					InsecureSkipVerify: true,
 				},
 			},
@@ -886,8 +886,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 					Secure:        true,
 					CertFile:      "/var/run/secrets/nats/client.crt",
 				},
@@ -899,8 +899,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:              "nats://localhost:4222",
-					Stream:           "ENSEMBLE_TAP",
-					SubjectPrefix:    "ensemble.tap",
+					Stream:           "SIPHON",
+					SubjectPrefix: "siphon.tap",
 					StreamMaxMsgSize: 2147483648,
 				},
 			},
@@ -911,8 +911,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:               "clickhouse:9000",
@@ -926,8 +926,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:          "clickhouse:9000",
@@ -941,15 +941,15 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:                  "clickhouse:9000",
 					Secure:                true,
 					CertFile:              "/var/run/secrets/clickhouse/client.crt",
 					ConsumerName:          "tap_clickhouse_sink",
-					Database:              "ensemble",
+					Database:              "siphon",
 					Table:                 "tap_events",
 					Username:              "default",
 					DialTimeout:           5 * time.Second,
@@ -972,8 +972,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr: "clickhouse",
@@ -986,8 +986,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr: "clickhouse:70000",
@@ -1000,15 +1000,15 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:                  "clickhouse:9000",
 					ConsumerAckWait:       30 * time.Second,
 					InsertTimeout:         30 * time.Second,
 					ConsumerName:          "tap_clickhouse_sink",
-					Database:              "ensemble",
+					Database:              "siphon",
 					Table:                 "tap_events",
 					Username:              "default",
 					DialTimeout:           5 * time.Second,
@@ -1029,8 +1029,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:                 "clickhouse:9000",
@@ -1045,8 +1045,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:            "clickhouse:9000",
@@ -1061,8 +1061,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:            "clickhouse:9000",
@@ -1078,13 +1078,13 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:           "nats://localhost:4222",
-					Stream:        "ENSEMBLE_TAP",
-					SubjectPrefix: "ensemble.tap",
+					Stream:        "SIPHON",
+					SubjectPrefix: "siphon.tap",
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:                  "clickhouse:9000",
 					ConsumerName:          "tap clickhouse sink",
-					Database:              "ensemble",
+					Database:              "siphon",
 					Table:                 "tap_events",
 					Username:              "default",
 					DialTimeout:           5 * time.Second,
@@ -1107,8 +1107,8 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 			cfg: Config{
 				NATS: NATSConfig{
 					URL:                 "nats://localhost:4222",
-					Stream:              "ENSEMBLE_TAP",
-					SubjectPrefix:       "ensemble.tap",
+					Stream:              "SIPHON",
+					SubjectPrefix: "siphon.tap",
 					MaxAge:              24 * time.Hour,
 					DedupWindow:         time.Minute,
 					ConnectTimeout:      5 * time.Second,
@@ -1130,7 +1130,7 @@ func TestConfigValidateNATSAndClickHouseRules(t *testing.T) {
 				},
 				ClickHouse: ClickHouseConfig{
 					Addr:                  "clickhouse-a:9000,clickhouse-b:9000",
-					Database:              "ensemble",
+					Database:              "siphon",
 					Table:                 "tap_events",
 					Username:              "default",
 					Password:              "secret",
@@ -1309,8 +1309,8 @@ func TestConfigValidateAdvancedNATSAndClickHouseControls(t *testing.T) {
 		return Config{
 			NATS: NATSConfig{
 				URL:                 "nats://localhost:4222",
-				Stream:              "ENSEMBLE_TAP",
-				SubjectPrefix:       "ensemble.tap",
+				Stream:              "SIPHON",
+				SubjectPrefix: "siphon.tap",
 				MaxAge:              24 * time.Hour,
 				DedupWindow:         time.Minute,
 				ConnectTimeout:      5 * time.Second,
@@ -1326,7 +1326,7 @@ func TestConfigValidateAdvancedNATSAndClickHouseControls(t *testing.T) {
 			},
 			ClickHouse: ClickHouseConfig{
 				Addr:                  "clickhouse:9000",
-				Database:              "ensemble",
+				Database:              "siphon",
 				Table:                 "tap_events",
 				Username:              "default",
 				DialTimeout:           5 * time.Second,

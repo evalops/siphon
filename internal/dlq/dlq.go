@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evalops/ensemble-tap/config"
+	"github.com/evalops/siphon/config"
 	"github.com/nats-io/nats.go"
 )
 
@@ -44,8 +44,8 @@ func NewPublisher(ctx context.Context, natsCfg config.NATSConfig, js nats.JetStr
 		js:       js,
 		natsCfg:  natsCfg,
 		stream:   natsCfg.Stream + "_DLQ",
-		base:     "ensemble.dlq",
-		subject:  "ensemble.dlq.>",
+		base:     "siphon.dlq",
+		subject:  "siphon.dlq.>",
 		consumer: "tap_dlq_replay",
 	}
 	if err := p.ensureStream(ctx); err != nil {
