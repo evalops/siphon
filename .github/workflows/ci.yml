@@ -74,7 +74,7 @@ jobs:
           awk -v got="$total" -v min="$MIN_COVERAGE" 'BEGIN { if (got+0 < min+0) { printf("coverage %.1f%% is below minimum %.1f%%\n", got, min); exit 1 } }'
 
       - name: Upload coverage profile
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-profile
           path: coverage.out
@@ -317,7 +317,7 @@ jobs:
           output-file: sbom-source.spdx.json
 
       - name: Upload source SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: source-sbom
           path: sbom-source.spdx.json
@@ -489,7 +489,7 @@ jobs:
 
       - name: Upload flake metrics artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-flake-metrics-${{ github.run_id }}
           path: flake-metrics/
