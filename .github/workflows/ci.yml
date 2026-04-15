@@ -499,7 +499,9 @@ jobs:
   create-failure-issue:
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(needs.*.result, 'failure') }}
     needs:
+      - proto-lint
       - test
+      - golangci-lint
       - staticcheck
       - openapi-contract
       - config-lint
