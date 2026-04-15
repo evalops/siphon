@@ -976,7 +976,9 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("create temp config: %w", err)
 		}
-		defer os.Remove(tmpFile.Name())
+		defer func() {
+			_ = os.Remove(tmpFile.Name())
+		}()
 		if _, err := tmpFile.WriteString(expanded); err != nil {
 			return Config{}, fmt.Errorf("write temp config: %w", err)
 		}
