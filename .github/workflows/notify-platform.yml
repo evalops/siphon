@@ -1,0 +1,24 @@
+name: Notify Platform Monorepo
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - name: Dispatch sync to platform
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_CONTROL_PLANE_SYNC_TOKEN || secrets.GH_BOT_TOKEN || secrets.PAT || github.token }}
+        run: |
+          service="${GITHUB_REPOSITORY#*/}"
+          gh api repos/evalops/platform/dispatches \
+            -X POST \
+            -f event_type="upstream-service-push" \
+            -f "client_payload[service]=${service}" \
+            -f "client_payload[source_sha]=${GITHUB_SHA}" \
+            -f "client_payload[source_ref]=${GITHUB_REF_NAME}"
